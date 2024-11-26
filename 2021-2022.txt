@@ -1,0 +1,73 @@
+### Mapleshire Council Financial Report 2021-2022
+
+---
+
+#### **Introduction**
+This financial report outlines Mapleshire Council's financial performance for the fiscal year 2021-2022. As the borough began recovering from the effects of the COVID-19 pandemic, the council focused on rebuilding the economy, enhancing public services, and addressing inequalities exacerbated by the crisis.
+
+---
+
+#### **Comprehensive Income and Expenditure**
+
+| Service              | Gross Expenditure (£m) | Gross Income (£m) | Net Expenditure (£m) |
+|----------------------|------------------------|--------------------|-----------------------|
+| Children's Services  | 72.0                  | 20.0              | 52.0                 |
+| Health & Adults      | 115.0                 | 42.0              | 73.0                 |
+| Housing              | 48.0                  | 26.0              | 22.0                 |
+| Education            | 92.0                  | 50.0              | 42.0                 |
+| Environment          | 35.0                  | 8.0               | 27.0                 |
+
+---
+
+#### **Reserve Balances**
+
+| Reserve             | Balance as of March 2021 (£m) | Balance as of March 2022 (£m) |
+|---------------------|------------------------------|-------------------------------|
+| General Fund        | 15.0                        | 13.5                         |
+| HRA Balance         | 43.5                        | 41.0                         |
+| Capital Receipts    | 10.0                        | 9.0                          |
+| Earmarked Reserves  | 22.5                        | 20.0                         |
+
+---
+
+### **Education**
+
+#### **Key Achievements**
+- **Catch-Up Funding**: Allocated £10 million for academic recovery programs, benefiting over 15,000 students impacted by pandemic-related disruptions.
+- **STEM Expansion**: Introduced new science labs and technology equipment across secondary schools, enhancing STEM education for 5,000 students.
+- **Vocational Training**: Launched apprenticeship partnerships with 50 local businesses, supporting career pathways for 1,200 young people.
+
+#### **Future Plans**
+- Increase investment in school mental health programs to address post-pandemic emotional well-being.
+- Expand partnerships with universities to create advanced courses in renewable energy and technology.
+- Develop programs to support adult learners seeking to reskill or upskill in high-demand fields.
+
+---
+
+### **Children’s and Adults’ Social Care**
+
+#### **Children's Social Care**
+- **Youth Programs**: Reopened community centers with new activities focused on youth engagement, supporting 3,000 children and young adults.
+- **Foster Care Improvements**: Enhanced training for foster carers, improving placement stability for 200 children in care.
+- **Family Support Services**: Expanded early intervention programs, reducing the number of children entering care by 8%.
+
+#### **Adult Social Care**
+- **Post-Pandemic Recovery**: Strengthened rehabilitation services to help adults recovering from long COVID and related conditions.
+- **Care Home Investments**: Allocated £5 million for upgrading care home facilities, benefiting 1,500 residents.
+- **Carer Respite Support**: Increased respite services for unpaid carers, providing 10,000 hours of relief care.
+
+#### **Key Challenges**
+- Rising demand for mental health and social care services post-pandemic.
+- Recruiting and retaining skilled staff in critical areas.
+- Balancing growing service needs with financial constraints.
+
+---
+
+#### **Key Highlights**
+- Successfully implemented academic recovery initiatives, boosting student performance across the borough.
+- Enhanced social care programs to support vulnerable residents and families.
+- Maintained financial stability while addressing increased demand for education and social services.
+
+---
+
+Let me know if you'd like further refinements or additional sections!
