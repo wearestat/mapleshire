@@ -7,13 +7,14 @@ import pandas as pd
 from pathlib import Path
 from supabase import create_client
 from PyPDF2 import PdfReader
+from openai import OpenAI
 
 # Initialize OpenAI and Supabase
 # Load environment variables from .env file
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
-supabase_url = os.getenv("SUPABASE_URL")
-supabase_key = os.getenv("SUPABASE_KEY")
+supabase_url = os.getenv("PRIVATE_SUPABASE_URL")
+supabase_key = os.getenv("PRIVATE_SUPABASE_ANON_KEY")
 supabase = create_client(supabase_url, supabase_key)
 
 # Function to download file
@@ -58,6 +59,7 @@ def process_text_or_markdown(file_path):
 
 # Generate embeddings
 def generate_embedding(content):
+
     response = openai.Embedding.create(
         input=content,
         model="text-embedding-ada-002"
