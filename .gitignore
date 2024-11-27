@@ -1,0 +1,50 @@
+# Python-related files
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+*.env
+
+# Virtual environment
+venv/
+.env/
+
+# VSCode settings
+.vscode/
+
+# macOS system files
+.DS_Store
+
+# Logs and debugging output
+*.log
+*.out
+*.err
+
+# Git-related files
+.git/
+*.swp
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+~$*
+
+# Compiled files
+*.so
+*.dll
+*.exe
+*.o
+*.a
+*.out
+
+# Downloads folder (if you use it for temporary files)
+downloads/
+
+# Jupyter Notebook checkpoints (if applicable)
+.ipynb_checkpoints/
+
+# Large files or archives
+*.zip
+*.tar.gz
+*.rar
