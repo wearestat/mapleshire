@@ -1,3 +1,4 @@
+from dotenv import load_dotenv
 import os
 import json
 import sys
@@ -8,6 +9,8 @@ from supabase import create_client
 from PyPDF2 import PdfReader
 
 # Initialize OpenAI and Supabase
+# Load environment variables from .env file
+load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 supabase_url = os.getenv("SUPABASE_URL")
 supabase_key = os.getenv("SUPABASE_KEY")
