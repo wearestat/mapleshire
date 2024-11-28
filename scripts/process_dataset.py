@@ -14,7 +14,7 @@ from openai import OpenAI
 load_dotenv()
 client = OpenAI()
 supabase_url = os.getenv("PRIVATE_SUPABASE_URL")
-supabase_key = os.getenv("PRIVATE_SUPABASE_ANON_KEY")
+supabase_key = os.getenv("SERVICE_ROLE")
 supabase = create_client(supabase_url, supabase_key)
 
 # Function to download file
@@ -37,7 +37,7 @@ def download_file(uri, destination="downloads"):
 def process_csv(file_path):
     dataframe = pd.read_csv(file_path)
     schema = {"fields": [{"name": col, "type": str(dataframe[col].dtype)} for col in dataframe.columns]}
-    tags = dataframe.columns.tolist()
+    tags = [{"name": col} for col in dataframe.columns]  # Convert tags to JSON format
     content = dataframe.head(100).to_markdown(index=False)  # Convert first 100 rows to Markdown
     return content, schema, tags
 
@@ -68,13 +68,17 @@ def generate_embedding(content):
 
 # Update Supabase
 def update_supabase(dataset_id, schema, tags, embedding):
+    # Perform the update
     response = supabase.table("datasets").update({
-        "schema": schema,
-        "tags": tags,
+        "schema": json.dumps(schema),  # Convert schema to JSON string
+        "tags": json.dumps(tags),  # Convert tags to JSON string
         "embedding": embedding
     }).eq("id", dataset_id).execute()
-    if response.error:
-        raise Exception(f"Supabase error: {response.error}")
+
+    # Check if there was an error
+    if not response.data:
+        raise Exception(f"Error updating dataset: {response}")
+    print("Supabase update successful!")
 
 # Main function to process files
 def process_dataset(payload):
