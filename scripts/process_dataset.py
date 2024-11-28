@@ -1,4 +1,4 @@
-from dotenv import load_dotenv
+#from dotenv import load_dotenv
 import os
 import json
 import sys
@@ -12,7 +12,7 @@ import numpy as np
 
 # Initialize OpenAI and Supabase
 # Load environment variables from .env file
-load_dotenv()
+#load_dotenv()
 client = OpenAI()
 supabase_url = os.getenv("PRIVATE_SUPABASE_URL")
 supabase_key = os.getenv("SERVICE_ROLE")
