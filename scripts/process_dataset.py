@@ -12,7 +12,12 @@ import numpy as np
 
 # Initialize OpenAI and Supabase
 # Load environment variables from .env file
-#load_dotenv()
+# Use dotenv for local testing only
+if os.getenv("GITHUB_ACTIONS") is None:  # Detect if running locally
+    from dotenv import load_dotenv
+    load_dotenv()
+
+
 client = OpenAI()
 supabase_url = os.getenv("PRIVATE_SUPABASE_URL")
 supabase_key = os.getenv("SERVICE_ROLE")
