@@ -19,7 +19,7 @@ if os.getenv("GITHUB_ACTIONS") is None:  # Detect if running locally
 
 
 client = OpenAI()
-supabase_url = os.getenv("PRIVATE_SUPABASE_URL")
+supabase_url = os.getenv("SUPABASE_URL")
 supabase_key = os.getenv("SERVICE_ROLE")
 supabase = create_client(supabase_url, supabase_key)
 MAX_TOKENS = 8191 
