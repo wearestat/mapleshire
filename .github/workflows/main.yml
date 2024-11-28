@@ -30,6 +30,6 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SERVICE_ROLE: ${{ secrets.SERVICE_ROLE }}
         run: |
           python scripts/process_dataset.py '${{ github.event.client_payload }}'
