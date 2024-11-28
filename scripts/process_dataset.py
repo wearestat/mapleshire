@@ -8,6 +8,7 @@ from pathlib import Path
 from supabase import create_client
 from PyPDF2 import PdfReader
 from openai import OpenAI
+import numpy as np
 
 # Initialize OpenAI and Supabase
 # Load environment variables from .env file
@@ -33,13 +34,39 @@ def download_file(uri, destination="downloads"):
         file.write(response.content)
     return file_path
 
-# Process CSV files
-def process_csv(file_path):
+def aggregate_embeddings(embeddings):
+    """
+    Aggregate embeddings by averaging them.
+    :param embeddings: List of embeddings (each is a list of floats)
+    :return: Averaged embedding
+    """
+    return np.mean(embeddings, axis=0).tolist()  # Average across all dimensions
+
+def process_csv(file_path, chunk_size=1000):
     dataframe = pd.read_csv(file_path)
+
+    # Extract schema
     schema = {"fields": [{"name": col, "type": str(dataframe[col].dtype)} for col in dataframe.columns]}
-    tags = [{"name": col} for col in dataframe.columns]  # Convert tags to JSON format
-    content = dataframe.head(100).to_markdown(index=False)  # Convert first 100 rows to Markdown
-    return content, schema, tags
+    
+    # Extract tags (column names as tags)
+    tags = [{"name": col} for col in dataframe.columns]
+
+    # Generate chunks
+    chunks = []
+    for i in range(0, len(dataframe), chunk_size):
+        chunk = dataframe.iloc[i:i + chunk_size]
+        chunk_content = chunk.to_markdown(index=False)
+        chunks.append(chunk_content)
+
+    # Generate embeddings for each chunk
+    embeddings = generate_embeddings_for_chunks(chunks)
+
+    # Compute the averaged embedding
+    aggregated_embedding = aggregate_embeddings(embeddings)
+
+    return aggregated_embedding, schema, tags
+
+
 
 # Process PDF files
 def process_pdf(file_path):
