@@ -42,6 +42,14 @@ def aggregate_embeddings(embeddings):
     """
     return np.mean(embeddings, axis=0).tolist()  # Average across all dimensions
 
+def generate_embeddings_for_chunks(chunks):
+    embeddings = []
+    for chunk in chunks:
+        embedding = generate_embedding(chunk)  # Existing function to generate embedding
+        embeddings.append(embedding)
+    return embeddings
+
+
 def process_csv(file_path, chunk_size=1000):
     dataframe = pd.read_csv(file_path)
 
