@@ -17,6 +17,8 @@ client = OpenAI()
 supabase_url = os.getenv("PRIVATE_SUPABASE_URL")
 supabase_key = os.getenv("SERVICE_ROLE")
 supabase = create_client(supabase_url, supabase_key)
+MAX_TOKENS = 8191 
+OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
 
 # Function to download file
 def download_file(uri, destination="downloads"):
@@ -42,12 +44,20 @@ def aggregate_embeddings(embeddings):
     """
     return np.mean(embeddings, axis=0).tolist()  # Average across all dimensions
 
+# Generate embeddings for chunks
 def generate_embeddings_for_chunks(chunks):
     embeddings = []
     for chunk in chunks:
-        embedding = generate_embedding(chunk)  # Existing function to generate embedding
-        embeddings.append(embedding)
+        if len(chunk) > MAX_TOKENS:
+            chunk = chunk[:MAX_TOKENS]  # Truncate to avoid exceeding token limit
+        try:
+            response = client.embeddings.create(input=chunk, model=OPENAI_EMBEDDING_MODEL)
+            embeddings.append(response.data[0].embedding)
+        except Exception as e:
+            print(f"Error generating embedding for chunk: {e}")
+            raise
     return embeddings
+
 
 
 def process_csv(file_path, chunk_size=1000):
@@ -68,29 +78,48 @@ def process_csv(file_path, chunk_size=1000):
 
     # Generate embeddings for each chunk
     embeddings = generate_embeddings_for_chunks(chunks)
-
     # Compute the averaged embedding
     aggregated_embedding = aggregate_embeddings(embeddings)
+    return aggregated_embedding, schema, tags
+
+# process pdf
+def process_pdf(file_path, chunk_size=1000):
+    """
+    Process large PDF files by chunking the extracted text.
+    """
+    reader = PdfReader(file_path)
+    content = " ".join(page.extract_text() for page in reader.pages)
+    # Break content into chunks
+    chunks = [content[i:i + chunk_size] for i in range(0, len(content), chunk_size)]
+    # Generate embeddings for each chunk
+    embeddings = generate_embeddings_for_chunks(chunks)
+    aggregated_embedding = aggregate_embeddings(embeddings)
+    # No schema for PDF files
+    schema = None
+    tags = []  # Tags can be added later with NLP if needed
+    return aggregated_embedding, schema, tags
+
+
+#process text
+def process_text_or_markdown(file_path, chunk_size=1000):
+    """
+    Process large text or Markdown files by chunking the content.
+    """
+    with open(file_path, "r") as file:
+        content = file.read()
+
+    # Break content into chunks
+    chunks = [content[i:i + chunk_size] for i in range(0, len(content), chunk_size)]
+    # Generate embeddings for each chunk
+    embeddings = generate_embeddings_for_chunks(chunks)
+    aggregated_embedding = aggregate_embeddings(embeddings)
+    # No schema for text/Markdown files
+    schema = None
+    tags = []  # Tags can be added later with NLP if needed
 
     return aggregated_embedding, schema, tags
 
 
-
-# Process PDF files
-def process_pdf(file_path):
-    reader = PdfReader(file_path)
-    content = " ".join(page.extract_text() for page in reader.pages)
-    schema = None  # PDFs typically don't have a schema
-    tags = []  # Tags could be extracted with NLP tools for topics
-    return content, schema, tags
-
-# Process Markdown/Text files
-def process_text_or_markdown(file_path):
-    with open(file_path, "r") as file:
-        content = file.read()
-    schema = None  # Text and Markdown files typically don't have a schema
-    tags = []  # Tags could be extracted with NLP tools
-    return content, schema, tags
 
 # Generate embeddings
 def generate_embedding(content):
@@ -115,6 +144,7 @@ def update_supabase(dataset_id, schema, tags, embedding):
         raise Exception(f"Error updating dataset: {response}")
     print("Supabase update successful!")
 
+
 # Main function to process files
 def process_dataset(payload):
     try:
@@ -123,28 +153,22 @@ def process_dataset(payload):
         dataset_id = payload["id"]
         organisation_id = payload["organisation_id"]
         uri = payload["URI"]
-
         print(f"Processing dataset {dataset_id} for organisation {organisation_id}")
-
         # Step 1: Download file
         file_path = download_file(uri)
-
         # Step 2: Determine file type and process
         file_ext = Path(file_path).suffix.lower()
         if file_ext == ".csv":
-            content, schema, tags = process_csv(file_path)
+            embeddings, schema, tags = process_csv(file_path)
         elif file_ext == ".pdf":
-            content, schema, tags = process_pdf(file_path)
+            embeddings, schema, tags = process_pdf(file_path)
         elif file_ext in [".md", ".txt"]:
-            content, schema, tags = process_text_or_markdown(file_path)
+            embeddings, schema, tags = process_text_or_markdown(file_path)
         else:
             raise ValueError(f"Unsupported file type: {file_ext}")
 
-        # Step 3: Generate embedding
-        embedding = generate_embedding(content)
-
-        # Step 4: Update Supabase
-        update_supabase(dataset_id, schema, tags, embedding)
+        # Step 5: Update Supabase
+        update_supabase(dataset_id, schema, tags, embeddings)
 
         print(f"Successfully processed dataset {dataset_id}")
     except Exception as e:
