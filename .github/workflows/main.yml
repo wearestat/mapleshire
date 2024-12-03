@@ -25,7 +25,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install pandas openai supabase PyPDF2 numpy requests
 
-          
+
       - name: Log Payload
         run: echo '${{ toJson(github.event.client_payload) }}'
       # Step 4: Process the dataset
@@ -36,4 +36,5 @@ jobs:
           SERVICE_ROLE: ${{ secrets.SERVICE_ROLE }}
         run: |
           echo '${{ toJson(github.event.client_payload) }}' > payload.json
+          cat payload.json
           python scripts/process_dataset.py payload.json
