@@ -155,6 +155,7 @@ def process_dataset(payload):
     try:
         # Parse payload
         print("Parsing JSON")
+        print(payload)
         payload = json.loads(payload)
         dataset_id = payload["id"]
         organisation_id = payload["organisation_id"]
@@ -178,6 +179,8 @@ def process_dataset(payload):
 
         print(f"Successfully processed dataset {dataset_id}")
         print("Process Finished!")
+    except json.JSONDecodeError as e:
+        print(f"Error parsing JSON: {e}")
     except Exception as e:
         print(f"Error processing dataset: {e}")
 
