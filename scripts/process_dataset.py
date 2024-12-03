@@ -155,8 +155,9 @@ def process_dataset(payload):
     try:
         # Parse payload
         print("Parsing JSON")
-        print(payload)
-        payload = json.loads(payload)
+        with open(payload, 'r') as f:
+            payload = json.load(f)
+        print("Payload:", payload)
         dataset_id = payload["id"]
         organisation_id = payload["organisation_id"]
         uri = payload["URI"]
