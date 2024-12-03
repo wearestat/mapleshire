@@ -182,6 +182,7 @@ def process_dataset(payload):
 if __name__ == "__main__":
     # Pass payload as an argument to the script
     if len(sys.argv) != 2:
-        print("Usage: python process_dataset.py '<payload>'")
+        print("Usage: python process_dataset.py '<payload_file>'")
         sys.exit(1)
-    process_dataset(sys.argv[1])
+    payload_file = sys.argv[1]
+    process_dataset(payload_file)
