@@ -154,6 +154,7 @@ def update_supabase(dataset_id, schema, tags, embedding):
 def process_dataset(payload):
     try:
         # Parse payload
+        print("Parsing JSON")
         payload = json.loads(payload)
         dataset_id = payload["id"]
         organisation_id = payload["organisation_id"]
@@ -176,6 +177,7 @@ def process_dataset(payload):
         update_supabase(dataset_id, schema, tags, embeddings)
 
         print(f"Successfully processed dataset {dataset_id}")
+        print("Process Finished!")
     except Exception as e:
         print(f"Error processing dataset: {e}")
 
@@ -185,4 +187,5 @@ if __name__ == "__main__":
         print("Usage: python process_dataset.py '<payload_file>'")
         sys.exit(1)
     payload_file = sys.argv[1]
+    print("Stating Process..........")
     process_dataset(payload_file)
