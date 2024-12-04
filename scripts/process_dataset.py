@@ -7,6 +7,7 @@ from pathlib import Path
 from supabase import create_client
 from PyPDF2 import PdfReader
 import numpy as np
+from openai import OpenAI
 
 # Load environment variables for local testing
 if os.getenv("GITHUB_ACTIONS") is None:  # Detect if running locally
@@ -19,6 +20,7 @@ supabase_key = os.getenv("SERVICE_ROLE")
 supabase = create_client(supabase_url, supabase_key)
 MAX_TOKENS = 8191
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
+client = OpenAI()
 
 # Function to download file
 def download_file(uri, destination="downloads"):
