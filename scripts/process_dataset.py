@@ -248,7 +248,10 @@ def process_dataset(payload):
             # Process CSV with batching and chunking
             rows, aggregated_embedding, schema, tags = process_csv_with_batching(
                 file_path=file_path,
-                dataset_id=dataset_id
+                dataset_id=dataset_id,
+                chunk_size=50, 
+                batch_size=50, 
+                tpm_limit=1000000
             )
         elif file_ext == ".pdf":
             rows, aggregated_embedding, schema, tags = process_pdf(file_path, dataset_id)
