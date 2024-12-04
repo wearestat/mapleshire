@@ -225,7 +225,7 @@ def process_dataset(payload):
                 file_path=file_path,
                 dataset_id=dataset_id,
                 chunk_size=100,   # Customize the chunk size for row grouping
-                batch_size=1000   # Customize the batch size for embedding requests
+                batch_size=500   # Customize the batch size for embedding requests
             )
         elif file_ext == ".pdf":
             rows, aggregated_embedding, schema, tags = process_pdf(file_path, dataset_id)
