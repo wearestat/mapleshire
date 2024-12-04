@@ -1,4 +1,3 @@
-#from dotenv import load_dotenv
 import os
 import json
 import sys
@@ -7,22 +6,18 @@ import pandas as pd
 from pathlib import Path
 from supabase import create_client
 from PyPDF2 import PdfReader
-from openai import OpenAI
 import numpy as np
 
-# Initialize OpenAI and Supabase
-# Load environment variables from .env file
-# Use dotenv for local testing only
+# Load environment variables for local testing
 if os.getenv("GITHUB_ACTIONS") is None:  # Detect if running locally
     from dotenv import load_dotenv
     load_dotenv()
 
-
-client = OpenAI()
+# Initialize OpenAI and Supabase
 supabase_url = os.getenv("SUPABASE_URL")
 supabase_key = os.getenv("SERVICE_ROLE")
 supabase = create_client(supabase_url, supabase_key)
-MAX_TOKENS = 8191 
+MAX_TOKENS = 8191
 OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
 
 # Function to download file
@@ -41,13 +36,17 @@ def download_file(uri, destination="downloads"):
         file.write(response.content)
     return file_path
 
+# Generate embedding for a single input
+def generate_embedding(content):
+    response = client.embeddings.create(
+        input=content,
+        model=OPENAI_EMBEDDING_MODEL
+    )
+    return response.data[0].embedding
+
+# Aggregate embeddings by averaging
 def aggregate_embeddings(embeddings):
-    """
-    Aggregate embeddings by averaging them.
-    :param embeddings: List of embeddings (each is a list of floats)
-    :return: Averaged embedding
-    """
-    return np.mean(embeddings, axis=0).tolist()  # Average across all dimensions
+    return np.mean(embeddings, axis=0).tolist()
 
 # Generate embeddings for chunks
 def generate_embeddings_for_chunks(chunks):
@@ -63,133 +62,135 @@ def generate_embeddings_for_chunks(chunks):
             raise
     return embeddings
 
-
-
-def process_csv(file_path, chunk_size=1000):
+# Process CSV files
+def process_csv(file_path, dataset_id, chunk_size=1000):
     dataframe = pd.read_csv(file_path)
-
-    # Extract schema
     schema = {"fields": [{"name": col, "type": str(dataframe[col].dtype)} for col in dataframe.columns]}
-    
-    # Extract tags (column names as tags)
     tags = [{"name": col} for col in dataframe.columns]
+    
+    rows = []
+    embeddings = []
+    
+    for index, row in dataframe.iterrows():
+        content = " ".join([f"{col}: {row[col]}" for col in dataframe.columns if pd.notna(row[col])])
+        embedding = generate_embedding(content)
+        rows.append({
+            "dataset_id": dataset_id,
+            "content": content,
+            "embedding": embedding,
+            "metadata": row.to_dict()
+        })
+        embeddings.append(embedding)
 
-    # Generate chunks
-    chunks = []
-    for i in range(0, len(dataframe), chunk_size):
-        chunk = dataframe.iloc[i:i + chunk_size]
-        chunk_content = chunk.to_markdown(index=False)
-        chunks.append(chunk_content)
-
-    # Generate embeddings for each chunk
-    embeddings = generate_embeddings_for_chunks(chunks)
-    # Compute the averaged embedding
+    # Calculate aggregated embedding
     aggregated_embedding = aggregate_embeddings(embeddings)
-    return aggregated_embedding, schema, tags
+    return rows, aggregated_embedding, schema, tags
 
-# process pdf
-def process_pdf(file_path, chunk_size=1000):
-    """
-    Process large PDF files by chunking the extracted text.
-    """
+# Process PDF files
+def process_pdf(file_path, dataset_id, chunk_size=1000):
     reader = PdfReader(file_path)
     content = " ".join(page.extract_text() for page in reader.pages)
-    # Break content into chunks
     chunks = [content[i:i + chunk_size] for i in range(0, len(content), chunk_size)]
-    # Generate embeddings for each chunk
     embeddings = generate_embeddings_for_chunks(chunks)
+
+    rows = []
+    for i, chunk in enumerate(chunks):
+        rows.append({
+            "dataset_id": dataset_id,
+            "content": chunk,
+            "embedding": embeddings[i],
+            "metadata": {}
+        })
+
     aggregated_embedding = aggregate_embeddings(embeddings)
-    # No schema for PDF files
     schema = None
-    tags = []  # Tags can be added later with NLP if needed
-    return aggregated_embedding, schema, tags
+    tags = []
+    return rows, aggregated_embedding, schema, tags
 
-
-#process text
-def process_text_or_markdown(file_path, chunk_size=1000):
-    """
-    Process large text or Markdown files by chunking the content.
-    """
+# Process text or Markdown files
+def process_text_or_markdown(file_path, dataset_id, chunk_size=1000):
     with open(file_path, "r") as file:
         content = file.read()
-
-    # Break content into chunks
     chunks = [content[i:i + chunk_size] for i in range(0, len(content), chunk_size)]
-    # Generate embeddings for each chunk
     embeddings = generate_embeddings_for_chunks(chunks)
+
+    rows = []
+    for i, chunk in enumerate(chunks):
+        rows.append({
+            "dataset_id": dataset_id,
+            "content": chunk,
+            "embedding": embeddings[i],
+            "metadata": {}
+        })
+
     aggregated_embedding = aggregate_embeddings(embeddings)
-    # No schema for text/Markdown files
     schema = None
-    tags = []  # Tags can be added later with NLP if needed
+    tags = []
+    return rows, aggregated_embedding, schema, tags
 
-    return aggregated_embedding, schema, tags
-
-
-
-# Generate embeddings
-def generate_embedding(content):
-
-    response = client.embeddings.create(
-        input=content,
-        model="text-embedding-3-small"
-    )
-    return response.data[0].embedding
-
-# Update Supabase
-def update_supabase(dataset_id, schema, tags, embedding):
-    # Perform the update
+# Update dataset metadata in Supabase
+def update_supabase_dataset(dataset_id, schema, tags, embedding):
     response = supabase.table("datasets").update({
-        "schema": json.dumps(schema),  # Convert schema to JSON string
-        "tags": json.dumps(tags),  # Convert tags to JSON string
+        "schema": json.dumps(schema),
+        "tags": json.dumps(tags),
         "embedding": embedding
     }).eq("id", dataset_id).execute()
 
-    # Check if there was an error
     if not response.data:
         raise Exception(f"Error updating dataset: {response}")
-    print("Supabase update successful!")
+    print("Supabase dataset update successful!")
 
+# Insert rows into `dataset_rows` table in Supabase
+def insert_rows_into_supabase(rows):
+    for row in rows:
+        response = supabase.table("dataset_rows").insert({
+            "dataset_id": row["dataset_id"],
+            "content": row["content"],
+            "embedding": row["embedding"],
+            "metadata": json.dumps(row["metadata"])
+        }).execute()
 
-# Main function to process files
+        if response.error:
+            raise Exception(f"Error inserting row: {response.error}")
+    print("Rows successfully inserted into dataset_rows!")
+
+# Main function to process datasets
 def process_dataset(payload):
     try:
         # Parse payload
-        print("Parsing JSON")
+        print("Parsing JSON payload")
         with open(payload, 'r') as f:
             payload = json.load(f)
-        print("Payload:", payload)
         dataset_id = payload["id"]
-        organisation_id = payload["organisation_id"]
         uri = payload["URI"]
-        print(f"Processing dataset {dataset_id} for organisation {organisation_id}")
-        # Step 1: Download file
+
+        print(f"Processing dataset {dataset_id}")
         file_path = download_file(uri)
-        # Step 2: Determine file type and process
         file_ext = Path(file_path).suffix.lower()
+
         if file_ext == ".csv":
-            embeddings, schema, tags = process_csv(file_path)
+            rows, aggregated_embedding, schema, tags = process_csv(file_path, dataset_id)
         elif file_ext == ".pdf":
-            embeddings, schema, tags = process_pdf(file_path)
+            rows, aggregated_embedding, schema, tags = process_pdf(file_path, dataset_id)
         elif file_ext in [".md", ".txt"]:
-            embeddings, schema, tags = process_text_or_markdown(file_path)
+            rows, aggregated_embedding, schema, tags = process_text_or_markdown(file_path, dataset_id)
         else:
             raise ValueError(f"Unsupported file type: {file_ext}")
 
-        # Step 5: Update Supabase
-        update_supabase(dataset_id, schema, tags, embeddings)
+        # Update dataset in `datasets` table
+        update_supabase_dataset(dataset_id, schema, tags, aggregated_embedding)
+
+        # Insert rows into `dataset_rows` table
+        insert_rows_into_supabase(rows)
 
         print(f"Successfully processed dataset {dataset_id}")
-        print("Process Finished!")
-    except json.JSONDecodeError as e:
-        print(f"Error parsing JSON: {e}")
     except Exception as e:
         print(f"Error processing dataset: {e}")
 
 if __name__ == "__main__":
-    # Pass payload as an argument to the script
     if len(sys.argv) != 2:
         print("Usage: python process_dataset.py '<payload_file>'")
         sys.exit(1)
+
     payload_file = sys.argv[1]
-    print("Stating Process..........")
     process_dataset(payload_file)
