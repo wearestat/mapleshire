@@ -64,6 +64,55 @@ def generate_embeddings_for_chunks(chunks):
             raise
     return embeddings
 
+def process_csv_with_batching(file_path, dataset_id, chunk_size=100, batch_size=1000):
+    """
+    Process a large CSV file with batching and chunking.
+    Each chunk is a group of rows combined into one text block.
+    """
+    dataframe = pd.read_csv(file_path)
+    
+    # Extract schema
+    schema = {"fields": [{"name": col, "type": str(dataframe[col].dtype)} for col in dataframe.columns]}
+    tags = [{"name": col} for col in dataframe.columns]
+    
+    chunks = []  # List to store chunks
+    embeddings = []  # List to store all embeddings
+
+    # Step 1: Create chunks of rows
+    for i in range(0, len(dataframe), chunk_size):
+        chunk = dataframe.iloc[i:i + chunk_size]
+        chunk_content = "\n".join([
+            " ".join([f"{col}: {row[col]}" for col in chunk.columns if pd.notna(row[col])])
+            for _, row in chunk.iterrows()
+        ])
+        chunks.append({
+            "dataset_id": dataset_id,
+            "content": chunk_content,
+            "metadata": {"chunk_start": i, "chunk_end": min(i + chunk_size, len(dataframe))}
+        })
+    
+    # Step 2: Batch embeddings
+    for i in range(0, len(chunks), batch_size):
+        batch = chunks[i:i + batch_size]
+        try:
+            # Prepare input for embedding API
+            batch_contents = [chunk["content"] for chunk in batch]
+            response = client.embeddings.create(input=batch_contents, model=OPENAI_EMBEDDING_MODEL)
+            batch_embeddings = [data["embedding"] for data in response.data]
+
+            # Attach embeddings to chunks
+            for j, embedding in enumerate(batch_embeddings):
+                batch[j]["embedding"] = embedding
+                embeddings.append(embedding)
+        except Exception as e:
+            print(f"Error generating embeddings for batch {i}-{i+batch_size}: {e}")
+            raise
+
+    # Step 3: Compute aggregated embedding for the entire dataset
+    aggregated_embedding = aggregate_embeddings(embeddings)
+
+    return chunks, aggregated_embedding, schema, tags
+
 # Process CSV files
 def process_csv(file_path, dataset_id, chunk_size=1000):
     dataframe = pd.read_csv(file_path)
@@ -170,8 +219,14 @@ def process_dataset(payload):
         file_path = download_file(uri)
         file_ext = Path(file_path).suffix.lower()
 
-        if file_ext == ".csv":
-            rows, aggregated_embedding, schema, tags = process_csv(file_path, dataset_id)
+        if file_ext == ".csv": 
+            # Process CSV with batching and chunking
+            rows, aggregated_embedding, schema, tags = process_csv_with_batching(
+                file_path=file_path,
+                dataset_id=dataset_id,
+                chunk_size=100,   # Customize the chunk size for row grouping
+                batch_size=1000   # Customize the batch size for embedding requests
+            )
         elif file_ext == ".pdf":
             rows, aggregated_embedding, schema, tags = process_pdf(file_path, dataset_id)
         elif file_ext in [".md", ".txt"]:
