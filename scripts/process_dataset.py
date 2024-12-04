@@ -8,6 +8,7 @@ from supabase import create_client
 from PyPDF2 import PdfReader
 import numpy as np
 from openai import OpenAI
+import time
 
 # Load environment variables for local testing
 if os.getenv("GITHUB_ACTIONS") is None:  # Detect if running locally
@@ -64,10 +65,42 @@ def generate_embeddings_for_chunks(chunks):
             raise
     return embeddings
 
-def process_csv_with_batching(file_path, dataset_id, chunk_size=100, batch_size=1000):
+import time
+
+def generate_embeddings_with_rate_limit(chunks, batch_size, model, tpm_limit):
     """
-    Process a large CSV file with batching and chunking.
-    Each chunk is a group of rows combined into one text block.
+    Generate embeddings with rate limiting to respect OpenAI TPM constraints.
+    """
+    embeddings = []
+    for i in range(0, len(chunks), batch_size):
+        batch = chunks[i:i + batch_size]
+        try:
+            # Prepare input for embedding API
+            batch_contents = [chunk["content"] for chunk in batch]
+            token_count = sum(len(content.split()) for content in batch_contents)
+
+            # Ensure we don’t exceed TPM
+            if token_count > tpm_limit:
+                wait_time = token_count / tpm_limit * 60  # Calculate wait time in seconds
+                print(f"Rate limit reached. Waiting for {wait_time:.2f} seconds...")
+                time.sleep(wait_time)
+
+            response = client.embeddings.create(input=batch_contents, model=model)
+            batch_embeddings = [data["embedding"] for data in response.data]
+
+            # Attach embeddings to chunks
+            for j, embedding in enumerate(batch_embeddings):
+                batch[j]["embedding"] = embedding
+                embeddings.append(embedding)
+        except Exception as e:
+            print(f"Error generating embeddings for batch {i}-{i+batch_size}: {e}")
+            raise
+
+    return embeddings
+
+def process_csv_with_batching(file_path, dataset_id, chunk_size=50, batch_size=50, tpm_limit=1000000):
+    """
+    Process a large CSV file with batching, chunking, and rate-limiting.
     """
     dataframe = pd.read_csv(file_path)
     
@@ -91,27 +124,19 @@ def process_csv_with_batching(file_path, dataset_id, chunk_size=100, batch_size=
             "metadata": {"chunk_start": i, "chunk_end": min(i + chunk_size, len(dataframe))}
         })
     
-    # Step 2: Batch embeddings
-    for i in range(0, len(chunks), batch_size):
-        batch = chunks[i:i + batch_size]
-        try:
-            # Prepare input for embedding API
-            batch_contents = [chunk["content"] for chunk in batch]
-            response = client.embeddings.create(input=batch_contents, model=OPENAI_EMBEDDING_MODEL)
-            batch_embeddings = [data["embedding"] for data in response.data]
-
-            # Attach embeddings to chunks
-            for j, embedding in enumerate(batch_embeddings):
-                batch[j]["embedding"] = embedding
-                embeddings.append(embedding)
-        except Exception as e:
-            print(f"Error generating embeddings for batch {i}-{i+batch_size}: {e}")
-            raise
+    # Step 2: Generate embeddings with rate limiting
+    embeddings = generate_embeddings_with_rate_limit(
+        chunks=chunks,
+        batch_size=batch_size,
+        model=OPENAI_EMBEDDING_MODEL,
+        tpm_limit=tpm_limit
+    )
 
     # Step 3: Compute aggregated embedding for the entire dataset
     aggregated_embedding = aggregate_embeddings(embeddings)
 
     return chunks, aggregated_embedding, schema, tags
+
 
 # Process CSV files
 def process_csv(file_path, dataset_id, chunk_size=1000):
@@ -223,9 +248,7 @@ def process_dataset(payload):
             # Process CSV with batching and chunking
             rows, aggregated_embedding, schema, tags = process_csv_with_batching(
                 file_path=file_path,
-                dataset_id=dataset_id,
-                chunk_size=100,   # Customize the chunk size for row grouping
-                batch_size=300   # Customize the batch size for embedding requests
+                dataset_id=dataset_id
             )
         elif file_ext == ".pdf":
             rows, aggregated_embedding, schema, tags = process_pdf(file_path, dataset_id)
