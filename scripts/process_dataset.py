@@ -9,6 +9,7 @@ from PyPDF2 import PdfReader
 import numpy as np
 from openai import OpenAI
 import time
+import logging
 
 # Load environment variables for local testing
 if os.getenv("GITHUB_ACTIONS") is None:  # Detect if running locally
@@ -65,7 +66,6 @@ def generate_embeddings_for_chunks(chunks):
             raise
     return embeddings
 
-import time
 
 def generate_embeddings_with_rate_limit(chunks, batch_size, model, tpm_limit):
     """
@@ -86,7 +86,7 @@ def generate_embeddings_with_rate_limit(chunks, batch_size, model, tpm_limit):
                 time.sleep(wait_time)
 
             response = client.embeddings.create(input=batch_contents, model=model)
-            batch_embeddings = [data["embedding"] for data in response.data]
+            batch_embeddings = [data.embedding for data in response.data]
 
             # Attach embeddings to chunks
             for j, embedding in enumerate(batch_embeddings):
@@ -218,25 +218,29 @@ def update_supabase_dataset(dataset_id, schema, tags, embedding):
 
 # Insert rows into `dataset_rows` table in Supabase
 def insert_rows_into_supabase(rows):
-    for row in rows:
-        response = supabase.table("dataset_rows").insert({
-            "dataset_id": row["dataset_id"],
-            "content": row["content"],
-            "embedding": row["embedding"],
-            "metadata": json.dumps(row["metadata"])
-        }).execute()
 
-        if response.error:
-            raise Exception(f"Error inserting row: {response.error}")
-    print("Rows successfully inserted into dataset_rows!")
+    response = supabase.table("dataset_rows").upsert(rows).execute()
+    # for row in rows:
+    #     response = supabase.table("dataset_rows").insert({
+    #         "dataset_id": row["dataset_id"],
+    #         "content": row["content"],
+    #         "embeddings": row["embedding"],
+    #         "metadata": json.dumps(row["metadata"])
+    #     }).execute()
+        # if response.error is None:
+        #     print("Inserted data:", response.data)
+        # else:
+        #     print("Error inserting row:", response.error)
+
+        #if response.error:
+        #    raise Exception(f"Error inserting row: {response.error}")
+    print("Rows successfully inserted into dataset_rows!" + response.count)
 
 # Main function to process datasets
 def process_dataset(payload):
     try:
         # Parse payload
         print("Parsing JSON payload")
-        with open(payload, 'r') as f:
-            payload = json.load(f)
         dataset_id = payload["id"]
         uri = payload["URI"]
 
@@ -272,8 +276,16 @@ def process_dataset(payload):
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print("Usage: python process_dataset.py '<payload_file>'")
+        print("Usage: python process_dataset.py <payload.json>")
         sys.exit(1)
-
     payload_file = sys.argv[1]
-    process_dataset(payload_file)
+    try:
+        with open(payload_file, 'r') as f:
+            payload = json.load(f)
+        process_dataset(payload)
+    except json.JSONDecodeError as e:
+        print(f"Invalid JSON input: {e}")
+        sys.exit(1)
+    except FileNotFoundError:
+        print(f"Payload file not found: {payload_file}")
+        sys.exit(1)
