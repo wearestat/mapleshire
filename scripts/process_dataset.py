@@ -13,6 +13,8 @@ import openpyxl
 import xlrd  # Ensure xlrd is installed for .xls files
 import openai
 from openai import OpenAI
+import requests
+import numpy as np
 
 # Load environment variables for local testing
 if os.getenv("GITHUB_ACTIONS") is None:  # Detect if running locally
@@ -185,7 +187,7 @@ class DatasetProcessor:
         self.chunk_size = 1000
         self.batch_size = 50
         self.tpm_limit = 1000000
-        self.file_path = download_file(self.uri)
+        self.file_path = download_file1(self.uri)
         self.file_ext = Path(self.file_path).suffix.lower()
         self.handler = self.get_handler()
 
@@ -232,6 +234,23 @@ class DatasetProcessor:
 
 
 # Helper Functions
+
+# Function to download file
+def download_file1(uri, destination="downloads"):
+    os.makedirs(destination, exist_ok=True)
+    file_name = Path(uri).name
+    file_path = os.path.join(destination, file_name)
+
+    # Convert GitHub blob URL to raw URL if needed
+    if "github.com" in uri:
+        uri = uri.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/")
+
+    response = requests.get(uri)
+    response.raise_for_status()
+    with open(file_path, "wb") as file:
+        file.write(response.content)
+    return file_path
+
 
 def download_file(uri: str, destination: str = "downloads") -> str:
     import requests
@@ -285,11 +304,20 @@ def generate_embeddings_with_rate_limit(chunks: List[Dict[str, Any]], batch_size
 
     return embeddings
 
-def aggregate_embeddings(embeddings: List[List[float]]) -> List[float]:
-    import numpy as np
+def aggregate_embeddings(embeddings):
+    # Check for empty input
     if not embeddings:
         return []
-    return list(np.mean(embeddings, axis=0))
+    
+    # Ensure embeddings are a proper NumPy array
+    np_embeddings = np.array(embeddings)
+    
+    # Handle single embedding case (avoid axis mismatch)
+    if np_embeddings.ndim == 1:
+        return np_embeddings.tolist()
+    
+    # Compute the mean along axis 0 and return as a list
+    return np.mean(np_embeddings, axis=0).tolist()
 
 def chunk_data(data: List[Dict[str, Any]], chunk_size: int):
     for i in range(0, len(data), chunk_size):
@@ -307,16 +335,12 @@ def create_content_rows(dataframe: pd.DataFrame, dataset_id: str) -> List[Dict[s
     return rows
 
 def attach_embeddings(chunks: List[Dict[str, Any]], embeddings: List[List[float]]) -> List[Dict[str, Any]]:
-    return [
-        {
-            "dataset_id": chunk["dataset_id"],
-            "content": chunk["content"],
-            "embedding": embedding,
-            "metadata": chunk["metadata"]
-        }
-        for chunk, embedding in zip(chunks, embeddings)
-    ]
-
+    chunk_size = len(embeddings) // len(chunks)  # Calculate the number of embeddings per chunk
+    for i, chunk in enumerate(chunks):
+        start_index = i * chunk_size
+        end_index = start_index + chunk_size
+        chunk["embedding"] = embeddings[start_index:end_index]  # Attach the relevant slice of embeddings
+    return chunks  # Return the updated chunks as rows
 
 def update_supabase_dataset(dataset_id: str, schema: Dict[str, Any], tags: List[Dict[str, str]], embedding: List[float]):
     try:
@@ -342,16 +366,6 @@ def insert_rows_into_supabase(rows: List[Dict[str, Any]]):
         raise
 
 
-def attach_embeddings(chunks: List[Dict[str, Any]], embeddings: List[List[float]]) -> List[Dict[str, Any]]:
-    return [
-        {
-            "dataset_id": chunk["dataset_id"],
-            "content": chunk["content"],
-            "embedding": embedding,
-            "metadata": chunk["metadata"]
-        }
-        for chunk, embedding in zip(chunks, embeddings)
-    ]
 
 def split_text(content: str, chunk_size: int) -> List[str]:
     """
@@ -393,15 +407,17 @@ def process_dataset(payload: Dict[str, Any]):
 # Entry Point
 
 if __name__ == "__main__":
-    if sys.stdin.isatty():
-        print("Usage: python process_dataset.py < payload.json")
+    if len(sys.argv) != 2:
+        print("Usage: python process_dataset.py <payload.json>")
         sys.exit(1)
-    else:
-        payload_input = sys.stdin.read()
-        print(f"Received payload: {payload_input}")  # Debugging line
-        try:
-            payload = json.loads(payload_input)
-            process_dataset(payload)
-        except json.JSONDecodeError as e:
-            print(f"Invalid JSON input: {e}")
-            sys.exit(1)
+    payload_file = sys.argv[1]
+    try:
+        with open(payload_file, 'r') as f:
+            payload = json.load(f)
+        process_dataset(payload)
+    except json.JSONDecodeError as e:
+        print(f"Invalid JSON input: {e}")
+        sys.exit(1)
+    except FileNotFoundError:
+        print(f"Payload file not found: {payload_file}")
+        sys.exit(1)
