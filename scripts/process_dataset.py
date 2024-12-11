@@ -9,6 +9,7 @@ from PyPDF2 import PdfReader
 import numpy as np
 from openai import OpenAI
 import time
+import openpyxl
 import logging
 
 # Load environment variables for local testing
@@ -39,6 +40,76 @@ def download_file(uri, destination="downloads"):
     with open(file_path, "wb") as file:
         file.write(response.content)
     return file_path
+
+# Function to chunk data
+def chunk_data(data, chunk_size):
+    """
+    Split data into chunks of specified size.
+    
+    Args:
+        data (list): List of data items.
+        chunk_size (int): Number of items per chunk.
+    
+    Returns:
+        generator: Yields chunks of data.
+    """
+    for i in range(0, len(data), chunk_size):
+        yield data[i:i + chunk_size]
+
+# Function to create content rows
+def create_content_rows(dataframe, dataset_id):
+    """
+    Create content rows from a DataFrame.
+    
+    Args:
+        dataframe (pd.DataFrame): DataFrame to process.
+        dataset_id (str): Identifier for the dataset.
+    
+    Returns:
+        list: List of dictionaries with content and metadata.
+    """
+    rows = []
+    for _, row in dataframe.iterrows():
+        content = " ".join([f"{col}: {row[col]}" for col in dataframe.columns if pd.notna(row[col])])
+        rows.append({
+            "dataset_id": dataset_id,
+            "content": content,
+            "metadata": row.to_dict()
+        })
+    return rows
+
+# Function to generate embeddings for chunks
+def generate_rows_with_embeddings(chunks, generate_embeddings_func, batch_size, model, tpm_limit):
+    """
+    Generate embeddings and attach them to content chunks.
+    
+    Args:
+        chunks (list): List of content dictionaries.
+        generate_embeddings_func (function): Function to generate embeddings.
+        batch_size (int): Number of chunks per batch.
+        model (str): OpenAI embedding model.
+        tpm_limit (int): Tokens per minute limit.
+    
+    Returns:
+        list: List of rows with embeddings.
+    """
+    embeddings = generate_embeddings_func(
+        chunks=chunks,
+        batch_size=batch_size,
+        model=model,
+        tpm_limit=tpm_limit
+    )
+    return [
+        {
+            "dataset_id": chunk["dataset_id"],
+            "content": chunk["content"],
+            "embedding": embeddings[i],
+            "metadata": chunk["metadata"]
+        }
+        for i, chunk in enumerate(chunks)
+    ]
+
+
 
 # Generate embedding for a single input
 def generate_embedding(content):
@@ -98,111 +169,119 @@ def generate_embeddings_with_rate_limit(chunks, batch_size, model, tpm_limit):
 
     return embeddings
 
-def process_csv_with_batching(file_path, dataset_id, chunk_size=50, batch_size=50, tpm_limit=1000000):
+def process_file(file_path, dataset_id, chunk_size=1000, batch_size=50, tpm_limit=1000000, file_type='csv'):
     """
-    Process a large CSV file with batching, chunking, and rate-limiting.
+    Generalized function to process CSV and XLS/XLSX files.
+    
+    Args:
+        file_path (str): Path to the file.
+        dataset_id (str): Identifier for the dataset.
+        chunk_size (int): Number of rows per chunk.
+        batch_size (int): Number of rows per batch for embedding generation.
+        tpm_limit (int): Tokens per minute limit.
+        file_type (str): Type of the file ('csv', 'xls', 'xlsx').
+    
+    Returns:
+        dict: Contains rows, aggregated_embedding, schema, and tags.
     """
-    dataframe = pd.read_csv(file_path)
+    try:
+        if file_type == 'csv':
+            reader = pd.read_csv(file_path, chunksize=chunk_size)
+        else:
+            engine = 'xlrd' if file_type == 'xls' else 'openpyxl'
+            dataframe = pd.read_excel(file_path, engine=engine)
+            reader = chunk_data(dataframe.to_dict('records'), chunk_size)
+        
+        all_rows = []
+        all_embeddings = []
+        schema = {}
+        tags = []
+        
+        for chunk_number, data_chunk in enumerate(reader, 1):
+            print(f"Processing chunk {chunk_number}")
+            
+            if file_type == 'csv':
+                dataframe_chunk = data_chunk
+                if not schema and not tags:
+                    schema = {"fields": [{"name": col, "type": str(dataframe_chunk[col].dtype)} for col in dataframe_chunk.columns]}
+                    tags = [{"name": col} for col in dataframe_chunk.columns]
+                chunks = create_content_rows(dataframe_chunk, dataset_id)
+            else:
+                dataframe_chunk = pd.DataFrame(data_chunk)
+                if not schema and not tags:
+                    schema = {"fields": [{"name": col, "type": str(dataframe_chunk[col].dtype)} for col in dataframe_chunk.columns]}
+                    tags = [{"name": col} for col in dataframe_chunk.columns]
+                chunks = create_content_rows(dataframe_chunk, dataset_id)
+            
+            # Generate rows with embeddings
+            rows = generate_rows_with_embeddings(
+                chunks=chunks,
+                generate_embeddings_func=generate_embeddings_with_rate_limit,
+                batch_size=batch_size,
+                model=OPENAI_EMBEDDING_MODEL,
+                tpm_limit=tpm_limit
+            )
+            
+            all_rows.extend(rows)
+            all_embeddings.extend([row["embedding"] for row in rows])
+        
+        aggregated_embedding = aggregate_embeddings(all_embeddings)
+        
+        return {
+            "rows": all_rows,
+            "aggregated_embedding": aggregated_embedding,
+            "schema": schema,
+            "tags": tags
+        }
     
-    # Extract schema
-    schema = {"fields": [{"name": col, "type": str(dataframe[col].dtype)} for col in dataframe.columns]}
-    tags = [{"name": col} for col in dataframe.columns]
+    except Exception as e:
+        print(f"Error processing file: {e}")
+        raise
+
+# Process text and PDF files with batching and chunking
+def process_general_file(content, dataset_id, chunk_size=1000, batch_size=50, tpm_limit=1000000):
+    """
+    Generalized function to process PDF and Text/Markdown files.
     
-    chunks = []  # List to store chunks
-    embeddings = []  # List to store all embeddings
-
-    # Step 1: Create chunks of rows
-    for i in range(0, len(dataframe), chunk_size):
-        chunk = dataframe.iloc[i:i + chunk_size]
-        chunk_content = "\n".join([
-            " ".join([f"{col}: {row[col]}" for col in chunk.columns if pd.notna(row[col])])
-            for _, row in chunk.iterrows()
-        ])
-        chunks.append({
-            "dataset_id": dataset_id,
-            "content": chunk_content,
-            "metadata": {"chunk_start": i, "chunk_end": min(i + chunk_size, len(dataframe))}
-        })
+    Args:
+        content (str): Extracted text content.
+        dataset_id (str): Identifier for the dataset.
+        chunk_size (int): Number of characters per chunk.
+        batch_size (int): Number of chunks per batch for embedding generation.
+        tpm_limit (int): Tokens per minute limit.
     
-    # Step 2: Generate embeddings with rate limiting
-    embeddings = generate_embeddings_with_rate_limit(
-        chunks=chunks,
-        batch_size=batch_size,
-        model=OPENAI_EMBEDDING_MODEL,
-        tpm_limit=tpm_limit
-    )
-
-    # Step 3: Compute aggregated embedding for the entire dataset
-    aggregated_embedding = aggregate_embeddings(embeddings)
-
-    return chunks, aggregated_embedding, schema, tags
-
-
-# Process CSV files
-def process_csv(file_path, dataset_id, chunk_size=1000):
-    dataframe = pd.read_csv(file_path)
-    schema = {"fields": [{"name": col, "type": str(dataframe[col].dtype)} for col in dataframe.columns]}
-    tags = [{"name": col} for col in dataframe.columns]
-    
-    rows = []
-    embeddings = []
-    
-    for index, row in dataframe.iterrows():
-        content = " ".join([f"{col}: {row[col]}" for col in dataframe.columns if pd.notna(row[col])])
-        embedding = generate_embedding(content)
-        rows.append({
-            "dataset_id": dataset_id,
-            "content": content,
-            "embedding": embedding,
-            "metadata": row.to_dict()
-        })
-        embeddings.append(embedding)
-
-    # Calculate aggregated embedding
-    aggregated_embedding = aggregate_embeddings(embeddings)
-    return rows, aggregated_embedding, schema, tags
-
-# Process PDF files
-def process_pdf(file_path, dataset_id, chunk_size=1000):
-    reader = PdfReader(file_path)
-    content = " ".join(page.extract_text() for page in reader.pages)
-    chunks = [content[i:i + chunk_size] for i in range(0, len(content), chunk_size)]
-    embeddings = generate_embeddings_for_chunks(chunks)
-
-    rows = []
-    for i, chunk in enumerate(chunks):
-        rows.append({
+    Returns:
+        dict: Contains rows, aggregated_embedding, schema, and tags.
+    """
+    try:
+        chunks_text = [content[i:i + chunk_size] for i in range(0, len(content), chunk_size)]
+        chunks = [{
             "dataset_id": dataset_id,
             "content": chunk,
-            "embedding": embeddings[i],
             "metadata": {}
-        })
-
-    aggregated_embedding = aggregate_embeddings(embeddings)
-    schema = None
-    tags = []
-    return rows, aggregated_embedding, schema, tags
-
-# Process text or Markdown files
-def process_text_or_markdown(file_path, dataset_id, chunk_size=1000):
-    with open(file_path, "r") as file:
-        content = file.read()
-    chunks = [content[i:i + chunk_size] for i in range(0, len(content), chunk_size)]
-    embeddings = generate_embeddings_for_chunks(chunks)
-
-    rows = []
-    for i, chunk in enumerate(chunks):
-        rows.append({
-            "dataset_id": dataset_id,
-            "content": chunk,
-            "embedding": embeddings[i],
-            "metadata": {}
-        })
-
-    aggregated_embedding = aggregate_embeddings(embeddings)
-    schema = None
-    tags = []
-    return rows, aggregated_embedding, schema, tags
+        } for chunk in chunks_text]
+        
+        rows = generate_rows_with_embeddings(
+            chunks=chunks,
+            generate_embeddings_func=generate_embeddings_with_rate_limit,
+            batch_size=batch_size,
+            model=OPENAI_EMBEDDING_MODEL,
+            tpm_limit=tpm_limit
+        )
+        
+        all_embeddings = [row["embedding"] for row in rows]
+        aggregated_embedding = aggregate_embeddings(all_embeddings)
+        
+        return {
+            "rows": rows,
+            "aggregated_embedding": aggregated_embedding,
+            "schema": None,
+            "tags": []
+        }
+    
+    except Exception as e:
+        print(f"Error processing general file: {e}")
+        raise
 
 # Update dataset metadata in Supabase
 def update_supabase_dataset(dataset_id, schema, tags, embedding):
@@ -220,23 +299,8 @@ def update_supabase_dataset(dataset_id, schema, tags, embedding):
 def insert_rows_into_supabase(rows):
 
     response = supabase.table("dataset_rows").upsert(rows).execute()
-    # for row in rows:
-    #     response = supabase.table("dataset_rows").insert({
-    #         "dataset_id": row["dataset_id"],
-    #         "content": row["content"],
-    #         "embeddings": row["embedding"],
-    #         "metadata": json.dumps(row["metadata"])
-    #     }).execute()
-        # if response.error is None:
-        #     print("Inserted data:", response.data)
-        # else:
-        #     print("Error inserting row:", response.error)
-
-        #if response.error:
-        #    raise Exception(f"Error inserting row: {response.error}")
     print("Rows successfully inserted into dataset_rows!" + response.count)
 
-# Main function to process datasets
 def process_dataset(payload):
     try:
         # Parse payload
@@ -248,32 +312,65 @@ def process_dataset(payload):
         file_path = download_file(uri)
         file_ext = Path(file_path).suffix.lower()
 
-        if file_ext == ".csv": 
-            # Process CSV with batching and chunking
-            rows, aggregated_embedding, schema, tags = process_csv_with_batching(
+        if file_ext == ".csv":
+            processed_data = process_file(
                 file_path=file_path,
                 dataset_id=dataset_id,
-                chunk_size=50, 
-                batch_size=50, 
-                tpm_limit=1000000
+                chunk_size=1000,
+                batch_size=50,
+                tpm_limit=1000000,
+                file_type='csv'
+            )
+        elif file_ext in [".xls", ".xlsx"]:
+            file_type = 'xls' if file_ext == '.xls' else 'xlsx'
+            processed_data = process_file(
+                file_path=file_path,
+                dataset_id=dataset_id,
+                chunk_size=1000,
+                batch_size=50,
+                tpm_limit=1000000,
+                file_type=file_type
             )
         elif file_ext == ".pdf":
-            rows, aggregated_embedding, schema, tags = process_pdf(file_path, dataset_id)
+            reader = PdfReader(file_path)
+            content = " ".join(page.extract_text() for page in reader.pages if page.extract_text())
+            processed_data = process_general_file(
+                content=content,
+                dataset_id=dataset_id,
+                chunk_size=1000,
+                batch_size=50,
+                tpm_limit=1000000
+            )
         elif file_ext in [".md", ".txt"]:
-            rows, aggregated_embedding, schema, tags = process_text_or_markdown(file_path, dataset_id)
+            with open(file_path, "r", encoding="utf-8") as file:
+                content = file.read()
+            processed_data = process_general_file(
+                content=content,
+                dataset_id=dataset_id,
+                chunk_size=1000,
+                batch_size=50,
+                tpm_limit=1000000
+            )
         else:
-            raise ValueError(f"Unsupported file type: {file_ext}")
+            raise ValueError(f"Unsupported file extension: {file_ext}")
 
-        # Update dataset in `datasets` table
-        update_supabase_dataset(dataset_id, schema, tags, aggregated_embedding)
+        # Update dataset metadata in Supabase
+        update_supabase_dataset(
+            dataset_id=dataset_id,
+            schema=processed_data["schema"],
+            tags=processed_data["tags"],
+            embedding=processed_data["aggregated_embedding"]
+        )
 
-        # Insert rows into `dataset_rows` table
-        insert_rows_into_supabase(rows)
+        # Insert rows into Supabase
+        insert_rows_into_supabase(processed_data["rows"])
 
         print(f"Successfully processed dataset {dataset_id}")
     except Exception as e:
         print(f"Error processing dataset: {e}")
+        sys.exit(1)
 
+# Entry point 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         print("Usage: python process_dataset.py <payload.json>")
