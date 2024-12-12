@@ -29,6 +29,9 @@ OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
 client = OpenAI()
 MAX_TOKENS = 8191
 
+
+
+
 @dataclass
 class ProcessedData:
     rows: List[Dict[str, Any]]
@@ -53,14 +56,14 @@ class FileHandler(ABC):
     def process(self) -> ProcessedData:
         pass
 
-    def generate_embeddings(self, chunks: List[Dict[str, Any]]) -> List[List[float]]:
-        embeddings = generate_embeddings_with_rate_limit(
+    def generate_embeddings(self, chunks: List[Dict[str, Any]]) :
+        rows = generate_embeddings_with_rate_limit(
             chunks=chunks,
             batch_size=self.batch_size,
             model=OPENAI_EMBEDDING_MODEL,
             tpm_limit=self.tpm_limit
         )
-        return embeddings
+        return rows
 
 
 class CSVHandler(FileHandler):
@@ -101,7 +104,7 @@ class ExcelHandler(FileHandler):
                 print(f"Processing Excel chunk {chunk_number}")
                 dataframe_chunk = pd.DataFrame(data_chunk)
                 if not self.schema and not self.tags:
-                    self.schema = {"fields": [{"name": col, "type": str(dtype)} for col, dtype in dataframe_chunk.dtypes.iteritems()]}
+                    self.schema = {"fields": [{"name": col, "type": str(dtype)} for col, dtype in dataframe_chunk.dtypes.items()]}
                     self.tags = [{"name": col} for col in dataframe_chunk.columns]
                 
                 chunks = create_content_rows(dataframe_chunk, self.dataset_id)
@@ -163,7 +166,7 @@ class TextHandler(FileHandler):
                 "metadata": {}
             } for chunk in chunks_text]
             
-            embeddings = self.generate_embeddings(chunks)
+            rows = self.generate_embeddings(chunks)
             rows = attach_embeddings(chunks, embeddings)
             self.all_rows.extend(rows)
             self.all_embeddings.extend(embeddings)
@@ -184,7 +187,7 @@ class DatasetProcessor:
     def __init__(self, payload: Dict[str, Any]):
         self.dataset_id = payload["id"]
         self.uri = payload["URI"]
-        self.chunk_size = 1000
+        self.chunk_size = 500
         self.batch_size = 50
         self.tpm_limit = 1000000
         self.file_path = download_file1(self.uri)
@@ -192,12 +195,13 @@ class DatasetProcessor:
         self.handler = self.get_handler()
 
     def get_handler(self) -> FileHandler:
+        chunk_size, batch_size = dynamic_chunk_batch_sizes(self.file_path)
         if self.file_ext == ".csv":
             return CSVHandler(
                 file_path=self.file_path,
                 dataset_id=self.dataset_id,
-                chunk_size=self.chunk_size,
-                batch_size=self.batch_size,
+                chunk_size=chunk_size,
+                batch_size=batch_size,
                 tpm_limit=self.tpm_limit
             )
         elif self.file_ext in [".xls", ".xlsx"]:
@@ -205,24 +209,24 @@ class DatasetProcessor:
             return ExcelHandler(
                 file_path=self.file_path,
                 dataset_id=self.dataset_id,
-                chunk_size=self.chunk_size,
-                batch_size=self.batch_size,
+                chunk_size=chunk_size,
+                batch_size=batch_size,
                 tpm_limit=self.tpm_limit
             )
         elif self.file_ext == ".pdf":
             return PDFHandler(
                 file_path=self.file_path,
                 dataset_id=self.dataset_id,
-                chunk_size=self.chunk_size,
-                batch_size=self.batch_size,
+                chunk_size=chunk_size,
+                batch_size=batch_size,
                 tpm_limit=self.tpm_limit
             )
         elif self.file_ext in [".md", ".txt"]:
             return TextHandler(
                 file_path=self.file_path,
                 dataset_id=self.dataset_id,
-                chunk_size=self.chunk_size,
-                batch_size=self.batch_size,
+                chunk_size=chunk_size,
+                batch_size=batch_size,
                 tpm_limit=self.tpm_limit
             )
         else:
@@ -252,35 +256,25 @@ def download_file1(uri, destination="downloads"):
     return file_path
 
 
-def download_file(uri: str, destination: str = "downloads") -> str:
-    import requests
-    from urllib.parse import urlparse
+ # Function for dyamnic chunk sizes
+def dynamic_chunk_batch_sizes(file_path: str):
+    file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+    if file_size_mb > 100:
+        return 100, 25
+    elif file_size_mb > 10:
+        return 500, 50
+    else:
+        return 1000, 100
+    
 
-    os.makedirs(destination, exist_ok=True)
-    parsed_url = urlparse(uri)
-    filename = os.path.basename(parsed_url.path)
-    file_path = os.path.join(destination, filename)
-
-    try:
-        response = requests.get(uri, stream=True)
-        response.raise_for_status()
-        with open(file_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
-        print(f"Downloaded file to {file_path}")
-        return file_path
-    except Exception as e:
-        print(f"Error downloading file: {e}")
-        raise
-
-def generate_embeddings_with_rate_limit(chunks: List[Dict[str, Any]], batch_size: int, model: str, tpm_limit: int) -> List[List[float]]:
+def generate_embeddings_with_rate_limit(chunks: List[Dict[str, Any]], batch_size: int, model: str, tpm_limit: int) :
     embeddings = []
     total_tokens = 0
     start_time = time.time()
 
     for i in range(0, len(chunks), batch_size):
         batch = chunks[i:i + batch_size]
-        batch_contents = [chunk["content"] for chunk in batch]
+        batch_contents = [chunk["content"] if chunk["content"].strip() else " " for chunk in batch] 
         token_count = sum(len(content.split()) for content in batch_contents)
         total_tokens += token_count
 
@@ -296,28 +290,30 @@ def generate_embeddings_with_rate_limit(chunks: List[Dict[str, Any]], batch_size
         try:
             response = client.embeddings.create(input=batch_contents, model=model)
             batch_embeddings = response.data[0].embedding
-            embeddings.extend(batch_embeddings)
+            # Attach embeddings directly to chunks
+            for j, chunk in enumerate(batch_embeddings):
+                if "embedding" not in chunk:
+                    chunk["embedding"] = []  # Initialize if not present
+                chunk["embedding"].append(batch_embeddings[j])
+            #embeddings.append(batch_embeddings)
             print(f"Generated embeddings for batch {i//batch_size + 1}")
         except Exception as e:
             print(f"Error generating embeddings for batch {i}-{i + batch_size}: {e}")
             raise
 
-    return embeddings
+    #return updated chunks which are the rows for the dataset
+    return chunks
 
+#
 def aggregate_embeddings(embeddings):
-    # Check for empty input
     if not embeddings:
-        return []
-    
-    # Ensure embeddings are a proper NumPy array
+        return [0] * 1536
     np_embeddings = np.array(embeddings)
-    
-    # Handle single embedding case (avoid axis mismatch)
     if np_embeddings.ndim == 1:
         return np_embeddings.tolist()
-    
-    # Compute the mean along axis 0 and return as a list
     return np.mean(np_embeddings, axis=0).tolist()
+    
+  
 
 def chunk_data(data: List[Dict[str, Any]], chunk_size: int):
     for i in range(0, len(data), chunk_size):
@@ -335,12 +331,15 @@ def create_content_rows(dataframe: pd.DataFrame, dataset_id: str) -> List[Dict[s
     return rows
 
 def attach_embeddings(chunks: List[Dict[str, Any]], embeddings: List[List[float]]) -> List[Dict[str, Any]]:
-    chunk_size = len(embeddings) // len(chunks)  # Calculate the number of embeddings per chunk
+    """
+    Attach embeddings to chunks by averaging embeddings if multiple embeddings exist per chunk.
+    """
     for i, chunk in enumerate(chunks):
-        start_index = i * chunk_size
-        end_index = start_index + chunk_size
-        chunk["embedding"] = embeddings[start_index:end_index]  # Attach the relevant slice of embeddings
-    return chunks  # Return the updated chunks as rows
+        # Validate and attach embedding directly
+        embedding = embeddings[i]
+        chunk["embedding"] = embedding
+
+    return chunks
 
 def update_supabase_dataset(dataset_id: str, schema: Dict[str, Any], tags: List[Dict[str, str]], embedding: List[float]):
     try:
@@ -384,6 +383,7 @@ def split_text(content: str, chunk_size: int) -> List[str]:
 
 def process_dataset(payload: Dict[str, Any]):
     try:
+        
         processor = DatasetProcessor(payload)
         processed_data = processor.process()
 
