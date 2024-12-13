@@ -39,6 +39,11 @@ class ProcessedData:
     schema: Dict[str, Any]
     tags: List[Dict[str, str]]
 
+@dataclass
+class ProcessedChunks:
+    rows: List[Dict[str, Any]]
+    embeddings: List[float]
+
 
 class FileHandler(ABC):
     def __init__(self, file_path: str, dataset_id: str, chunk_size: int, batch_size: int, tpm_limit: int):
@@ -56,14 +61,14 @@ class FileHandler(ABC):
     def process(self) -> ProcessedData:
         pass
 
-    def generate_embeddings(self, chunks: List[Dict[str, Any]]) :
-        rows = generate_embeddings_with_rate_limit(
+    def generate_embeddings(self, chunks: List[Dict[str, Any]]) -> ProcessedChunks :
+        data = generate_embeddings_with_rate_limit(
             chunks=chunks,
             batch_size=self.batch_size,
             model=OPENAI_EMBEDDING_MODEL,
             tpm_limit=self.tpm_limit
         )
-        return rows
+        return data
 
 
 class CSVHandler(FileHandler):
@@ -77,10 +82,9 @@ class CSVHandler(FileHandler):
                     self.tags = [{"name": col} for col in dataframe.columns]
                 
                 chunks = create_content_rows(dataframe, self.dataset_id)
-                embeddings = self.generate_embeddings(chunks)
-                rows = attach_embeddings(chunks, embeddings)
-                self.all_rows.extend(rows)
-                self.all_embeddings.extend(embeddings)
+                data = self.generate_embeddings(chunks)
+                self.all_rows.extend(data.rows)
+                self.all_embeddings.extend(data.embeddings)
             
             aggregated_embedding = aggregate_embeddings(self.all_embeddings)
             return ProcessedData(
@@ -108,10 +112,9 @@ class ExcelHandler(FileHandler):
                     self.tags = [{"name": col} for col in dataframe_chunk.columns]
                 
                 chunks = create_content_rows(dataframe_chunk, self.dataset_id)
-                embeddings = self.generate_embeddings(chunks)
-                rows = attach_embeddings(chunks, embeddings)
-                self.all_rows.extend(rows)
-                self.all_embeddings.extend(embeddings)
+                data = self.generate_embeddings(chunks)
+                self.all_rows.extend(data.rows)
+                self.all_embeddings.extend(data.embeddings)
             
             aggregated_embedding = aggregate_embeddings(self.all_embeddings)
             return ProcessedData(
@@ -136,11 +139,10 @@ class PDFHandler(FileHandler):
                 "content": chunk,
                 "metadata": {}
             } for chunk in chunks_text]
-            
-            embeddings = self.generate_embeddings(chunks)
-            rows = attach_embeddings(chunks, embeddings)
-            self.all_rows.extend(rows)
-            self.all_embeddings.extend(embeddings)
+        
+            data = self.generate_embeddings(chunks)
+            self.all_rows.extend(data.rows)
+            self.all_embeddings.extend(data.embeddings)
             
             aggregated_embedding = aggregate_embeddings(self.all_embeddings)
             return ProcessedData(
@@ -166,10 +168,10 @@ class TextHandler(FileHandler):
                 "metadata": {}
             } for chunk in chunks_text]
             
-            rows = self.generate_embeddings(chunks)
-            rows = attach_embeddings(chunks, embeddings)
-            self.all_rows.extend(rows)
-            self.all_embeddings.extend(embeddings)
+            
+            data = self.generate_embeddings(chunks)
+            self.all_rows.extend(data.rows)
+            self.all_embeddings.extend(data.embeddings)
             
             aggregated_embedding = aggregate_embeddings(self.all_embeddings)
             return ProcessedData(
@@ -267,11 +269,10 @@ def dynamic_chunk_batch_sizes(file_path: str):
         return 1000, 100
     
 
-def generate_embeddings_with_rate_limit(chunks: List[Dict[str, Any]], batch_size: int, model: str, tpm_limit: int) :
-    embeddings = []
+def generate_embeddings_with_rate_limit(chunks: List[Dict[str, Any]], batch_size: int, model: str, tpm_limit: int) ->ProcessedChunks:
     total_tokens = 0
     start_time = time.time()
-
+    embeddings=[]
     for i in range(0, len(chunks), batch_size):
         batch = chunks[i:i + batch_size]
         batch_contents = [chunk["content"] if chunk["content"].strip() else " " for chunk in batch] 
@@ -290,27 +291,42 @@ def generate_embeddings_with_rate_limit(chunks: List[Dict[str, Any]], batch_size
         try:
             response = client.embeddings.create(input=batch_contents, model=model)
             batch_embeddings = response.data[0].embedding
+            embeddings.extend(batch_embeddings)
             # Attach embeddings directly to chunks
-            for j, chunk in enumerate(batch_embeddings):
+            for j, chunk in enumerate(chunks):
                 if "embedding" not in chunk:
                     chunk["embedding"] = []  # Initialize if not present
                 chunk["embedding"].append(batch_embeddings[j])
-            #embeddings.append(batch_embeddings)
             print(f"Generated embeddings for batch {i//batch_size + 1}")
         except Exception as e:
             print(f"Error generating embeddings for batch {i}-{i + batch_size}: {e}")
             raise
 
     #return updated chunks which are the rows for the dataset
-    return chunks
+    return ProcessedChunks(
+                rows=chunks,
+                embeddings=embeddings
+            )
 
-#
+# Function to aggregate embeddings
 def aggregate_embeddings(embeddings):
+    """
+    Compute an aggregated embedding for the dataset by averaging.
+    Ensure the aggregated embedding does not exceed 1536 dimensions.
+    """
     if not embeddings:
-        return [0] * 1536
+        return [0] * 1536  # Return a zero vector if no embeddings
+
     np_embeddings = np.array(embeddings)
-    if np_embeddings.ndim == 1:
+
+    if (np_embeddings.shape[0]>1)  and np_embeddings.shape[0] > 1536:
+        # Ensure embeddings are sliced properly for high dimensions
+        np_embeddings = np_embeddings[:1536]
+
+    # If the array is already one-dimensional, return as-is
+    if len(np_embeddings.shape) == 1:
         return np_embeddings.tolist()
+
     return np.mean(np_embeddings, axis=0).tolist()
     
   
@@ -320,13 +336,17 @@ def chunk_data(data: List[Dict[str, Any]], chunk_size: int):
         yield data[i:i + chunk_size]
 
 def create_content_rows(dataframe: pd.DataFrame, dataset_id: str) -> List[Dict[str, Any]]:
+    def sanitise_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert NaN and NaT values to None for JSON compatibility."""
+        return {k: (None if pd.isna(v) else v) for k, v in metadata.items()}
     rows = []
     for _, row in dataframe.iterrows():
         content = " ".join([f"{col}: {row[col]}" for col in dataframe.columns if pd.notna(row[col])])
+        sanitised_metadata = sanitise_metadata(row.to_dict())
         rows.append({
             "dataset_id": dataset_id,
             "content": content,
-            "metadata": row.to_dict()
+            "metadata": sanitised_metadata
         })
     return rows
 
