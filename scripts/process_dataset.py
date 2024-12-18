@@ -338,7 +338,10 @@ def chunk_data(data: List[Dict[str, Any]], chunk_size: int):
 def create_content_rows(dataframe: pd.DataFrame, dataset_id: str) -> List[Dict[str, Any]]:
     def sanitise_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
         """Convert NaN and NaT values to None for JSON compatibility."""
-        return {k: (None if pd.isna(v) else v) for k, v in metadata.items()}
+        return {
+        k: (v.isoformat() if isinstance(v, pd.Timestamp) else None if pd.isna(v) else v)
+        for k, v in metadata.items()
+    }
     rows = []
     for _, row in dataframe.iterrows():
         content = " ".join([f"{col}: {row[col]}" for col in dataframe.columns if pd.notna(row[col])])
