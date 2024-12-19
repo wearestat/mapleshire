@@ -298,6 +298,7 @@ def generate_embeddings_with_rate_limit(chunks: List[Dict[str, Any]], batch_size
                     chunk["embedding"] = []  # Initialize if not present
                 chunk["embedding"].append(batch_embeddings[j])
             print(f"Generated embeddings for batch {i//batch_size + 1}")
+            
         except Exception as e:
             print(f"Error generating embeddings for batch {i}-{i + batch_size}: {e}")
             raise
