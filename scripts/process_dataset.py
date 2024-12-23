@@ -64,7 +64,6 @@ class FileHandler(ABC):
     def generate_embeddings(self, chunks: List[Dict[str, Any]]) -> ProcessedChunks :
         data = generate_embeddings_with_rate_limit(
             chunks=chunks,
-            batch_size=self.batch_size,
             model=OPENAI_EMBEDDING_MODEL,
             tpm_limit=self.tpm_limit
         )
@@ -104,7 +103,8 @@ class ExcelHandler(FileHandler):
             file_ext = Path(self.file_path).suffix.lower()
             engine = 'xlrd' if file_ext == '.xls' else 'openpyxl'
             dataframe = pd.read_excel(self.file_path, engine=engine)
-            for chunk_number, data_chunk in enumerate(chunk_data(dataframe.to_dict('records'), self.chunk_size), 1):
+            batch =enumerate(chunk_data(dataframe.to_dict('records')), 1)
+            for chunk_number, data_chunk in batch:
                 print(f"Processing Excel chunk {chunk_number}")
                 dataframe_chunk = pd.DataFrame(data_chunk)
                 if not self.schema and not self.tags:
@@ -113,6 +113,7 @@ class ExcelHandler(FileHandler):
                 
                 chunks = create_content_rows(dataframe_chunk, self.dataset_id)
                 data = self.generate_embeddings(chunks)
+               
                 self.all_rows.extend(data.rows)
                 self.all_embeddings.extend(data.embeddings)
             
@@ -266,17 +267,18 @@ def dynamic_chunk_batch_sizes(file_path: str):
     elif file_size_mb > 10:
         return 500, 50
     else:
-        return 1000, 100
+        return 1000, 10
     
 
-def generate_embeddings_with_rate_limit(chunks: List[Dict[str, Any]], batch_size: int, model: str, tpm_limit: int) ->ProcessedChunks:
+def generate_embeddings_with_rate_limit(chunks: List[Dict[str, Any]], model: str, tpm_limit: int) ->ProcessedChunks:
     total_tokens = 0
     start_time = time.time()
-    embeddings=[]
-    for i in range(0, len(chunks), batch_size):
-        batch = chunks[i:i + batch_size]
-        batch_contents = [chunk["content"] if chunk["content"].strip() else " " for chunk in batch] 
-        token_count = sum(len(content.split()) for content in batch_contents)
+    embeddings = []
+    count=0
+    for chunk in chunks:
+        print(f"Number of chunks" + str(len(chunks)))
+        content = chunk["content"] if chunk["content"].strip() else " "
+        token_count = len(content.split())
         total_tokens += token_count
 
         # Check if rate limit exceeded
@@ -289,25 +291,21 @@ def generate_embeddings_with_rate_limit(chunks: List[Dict[str, Any]], batch_size
             total_tokens = 0
 
         try:
-            response = client.embeddings.create(input=batch_contents, model=model)
-            batch_embeddings = response.data[0].embedding
-            embeddings.extend(batch_embeddings)
-            # Attach embeddings directly to chunks
-            for j, chunk in enumerate(chunks):
-                if "embedding" not in chunk:
+            response = client.embeddings.create(input=[content], model=model)
+            embedding = response.data[0].embedding
+            if "embedding" not in chunk:
                     chunk["embedding"] = []  # Initialize if not present
-                chunk["embedding"].append(batch_embeddings[j])
-            print(f"Generated embeddings for batch {i//batch_size + 1}")
-            
+            chunk["embedding"] = embedding
+            embeddings.append(embedding)
+
+            print(f"Generated embedding for chunk" + str(count))
+            count+=1
         except Exception as e:
-            print(f"Error generating embeddings for batch {i}-{i + batch_size}: {e}")
+            print(f"Error generating embedding for chunk: {e}")
             raise
 
-    #return updated chunks which are the rows for the dataset
-    return ProcessedChunks(
-                rows=chunks,
-                embeddings=embeddings
-            )
+    return ProcessedChunks(rows=chunks, embeddings=embeddings)
+
 
 # Function to aggregate embeddings
 def aggregate_embeddings(embeddings):
@@ -336,6 +334,7 @@ def chunk_data(data: List[Dict[str, Any]], chunk_size: int):
     for i in range(0, len(data), chunk_size):
         yield data[i:i + chunk_size]
 
+
 def create_content_rows(dataframe: pd.DataFrame, dataset_id: str) -> List[Dict[str, Any]]:
     def sanitise_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
         """Convert NaN and NaT values to None for JSON compatibility."""
@@ -355,15 +354,10 @@ def create_content_rows(dataframe: pd.DataFrame, dataset_id: str) -> List[Dict[s
     return rows
 
 def attach_embeddings(chunks: List[Dict[str, Any]], embeddings: List[List[float]]) -> List[Dict[str, Any]]:
-    """
-    Attach embeddings to chunks by averaging embeddings if multiple embeddings exist per chunk.
-    """
     for i, chunk in enumerate(chunks):
-        # Validate and attach embedding directly
-        embedding = embeddings[i]
-        chunk["embedding"] = embedding
+        chunk["embedding"] = embeddings[i]  # Attach the embedding directly to the chunk
+    return chunks  # Return the updated chunks as rows
 
-    return chunks
 
 def update_supabase_dataset(dataset_id: str, schema: Dict[str, Any], tags: List[Dict[str, str]], embedding: List[float]):
     try:
