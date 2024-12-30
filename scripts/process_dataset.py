@@ -73,18 +73,24 @@ class FileHandler(ABC):
 class CSVHandler(FileHandler):
     def process(self) -> ProcessedData:
         try:
-            reader = pd.read_csv(self.file_path, chunksize=self.chunk_size)
-            for chunk_number, dataframe in enumerate(reader, 1):
-                print(f"Processing CSV chunk {chunk_number}")
-                if not self.schema and not self.tags:
-                    self.schema = {"fields": [{"name": col, "type": str(dtype)} for col, dtype in dataframe.dtypes.iteritems()]}
-                    self.tags = [{"name": col} for col in dataframe.columns]
-                
-                chunks = create_content_rows(dataframe, self.dataset_id)
-                data = self.generate_embeddings(chunks)
-                self.all_rows.extend(data.rows)
-                self.all_embeddings.extend(data.embeddings)
-            
+            # Read the entire CSV file into a single DataFrame
+            dataframe = pd.read_csv(self.file_path)
+            print(f"Processing entire CSV file")
+
+            # Extract schema and tags if not already set
+            if not self.schema and not self.tags:
+                self.schema = {"fields": [{"name": col, "type": str(dtype)} for col, dtype in dataframe.dtypes.items()]}
+                self.tags = [{"name": col} for col in dataframe.columns]
+
+            # Create content rows and generate embeddings
+            rows = create_content_rows(dataframe, self.dataset_id)
+            chunks = list(chunk_data(rows, self.batch_size))
+            embeddings = self.generate_embeddings(chunks)
+            updated_chunks = attach_embeddings(chunks, embeddings)
+            self.all_rows.extend(updated_chunks)
+            self.all_embeddings.extend(embeddings)
+
+            # Aggregate embeddings
             aggregated_embedding = aggregate_embeddings(self.all_embeddings)
             return ProcessedData(
                 rows=self.all_rows,
@@ -100,23 +106,28 @@ class CSVHandler(FileHandler):
 class ExcelHandler(FileHandler):
     def process(self) -> ProcessedData:
         try:
+            # Determine the appropriate engine based on file extension
             file_ext = Path(self.file_path).suffix.lower()
             engine = 'xlrd' if file_ext == '.xls' else 'openpyxl'
-            dataframe = pd.read_excel(self.file_path, engine=engine)
-            batch =enumerate(chunk_data(dataframe.to_dict('records')), 1)
-            for chunk_number, data_chunk in batch:
-                print(f"Processing Excel chunk {chunk_number}")
-                dataframe_chunk = pd.DataFrame(data_chunk)
-                if not self.schema and not self.tags:
-                    self.schema = {"fields": [{"name": col, "type": str(dtype)} for col, dtype in dataframe_chunk.dtypes.items()]}
-                    self.tags = [{"name": col} for col in dataframe_chunk.columns]
-                
-                chunks = create_content_rows(dataframe_chunk, self.dataset_id)
-                data = self.generate_embeddings(chunks)
-               
-                self.all_rows.extend(data.rows)
-                self.all_embeddings.extend(data.embeddings)
             
+            # Read the entire Excel file into a single DataFrame
+            dataframe = pd.read_excel(self.file_path, engine=engine)
+            print(f"Processing entire Excel file")
+
+            # Extract schema and tags if not already set
+            if not self.schema and not self.tags:
+                self.schema = {"fields": [{"name": col, "type": str(dtype)} for col, dtype in dataframe.dtypes.items()]}
+                self.tags = [{"name": col} for col in dataframe.columns]
+
+            # Create content rows and generate embeddings
+            #clean data 
+            rows = create_content_rows(dataframe, self.dataset_id)
+            chunks  = smart_chunk_data(rows, 1000)
+            processedData = self.generate_embeddings(chunks)
+            self.all_rows.extend(processedData.rows)
+            self.all_embeddings.extend(processedData.embeddings)
+
+            # Aggregate embeddings
             aggregated_embedding = aggregate_embeddings(self.all_embeddings)
             return ProcessedData(
                 rows=self.all_rows,
@@ -127,7 +138,6 @@ class ExcelHandler(FileHandler):
         except Exception as e:
             print(f"Error processing Excel file: {e}")
             raise
-
 
 class PDFHandler(FileHandler):
     def process(self) -> ProcessedData:
@@ -264,19 +274,57 @@ def dynamic_chunk_batch_sizes(file_path: str):
     file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
     if file_size_mb > 100:
         return 100, 25
-    elif file_size_mb > 10:
-        return 500, 50
+    elif file_size_mb > 25:
+        return 50, 10
     else:
-        return 1000, 10
+        return 10, 5
     
 
-def generate_embeddings_with_rate_limit(chunks: List[Dict[str, Any]], model: str, tpm_limit: int) ->ProcessedChunks:
+
+def smart_chunk_data(data: List[Dict[str, Any]], max_tokens: int, max_chunks: int = 500) -> List[Dict[str, Any]]:
+    """
+    Chunk data into a flat list of aggregated chunks, not exceeding max_chunks.
+    Each chunk's total tokens do not exceed max_tokens.
+
+    Args:
+        data (List[Dict[str, Any]]): The list of data rows.
+        max_tokens (int): Maximum number of tokens per chunk.
+        max_chunks (int): Maximum number of chunks.
+
+    Returns:
+        List[Dict[str, Any]]: A list of aggregated data chunks.
+    """
+    total_tokens = sum(len(row.get("content", "").split()) for row in data)
+    tokens_per_chunk = max(total_tokens // max_chunks, max_tokens)
+    
+    chunks = []
+    current_chunk = {"content": "", "metadata": {}}
+    current_tokens = 0
+
+    for row in data:
+        content = row.get("content", "").strip()
+        token_count = len(content.split())
+
+        if current_tokens + token_count > tokens_per_chunk and len(chunks) < max_chunks - 1:
+            chunks.append(current_chunk)
+            current_chunk = {"content": "", "metadata": {}}
+            current_tokens = 0
+
+        current_chunk["content"] += f" {content}"
+        current_tokens += token_count
+
+    if current_chunk["content"]:
+        chunks.append(current_chunk)
+
+    return chunks
+
+def generate_embeddings_with_rate_limit(chunks:List[Dict[str, Any]], model: str, tpm_limit: int) ->ProcessedChunks:
     total_tokens = 0
     start_time = time.time()
     embeddings = []
     count=0
+    print(f"Number of chunks" + str(len(chunks)))
     for chunk in chunks:
-        print(f"Number of chunks" + str(len(chunks)))
         content = chunk["content"] if chunk["content"].strip() else " "
         token_count = len(content.split())
         total_tokens += token_count

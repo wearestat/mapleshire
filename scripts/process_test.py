@@ -14,7 +14,8 @@ from openai import OpenAI
 import requests
 import numpy as np
 from llama_index import Document
-
+from llama_index import GPTVectorStoreIndex, LLMPredictor, ServiceContext, Document
+from langchain.chat_models import ChatOpenAI
 
 # Load environment variables for local testing
 if os.getenv("GITHUB_ACTIONS") is None:  # Detect if running locally
