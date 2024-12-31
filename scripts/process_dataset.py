@@ -84,12 +84,10 @@ class CSVHandler(FileHandler):
 
             # Create content rows and generate embeddings
             rows = create_content_rows(dataframe, self.dataset_id)
-            chunks = list(chunk_data(rows, self.batch_size))
-            embeddings = self.generate_embeddings(chunks)
-            updated_chunks = attach_embeddings(chunks, embeddings)
-            self.all_rows.extend(updated_chunks)
-            self.all_embeddings.extend(embeddings)
-
+            chunks  = smart_chunk_data(rows, 1000)
+            processedData = self.generate_embeddings(chunks)
+            self.all_rows.extend(processedData.rows)
+            self.all_embeddings.extend(processedData.embeddings)
             # Aggregate embeddings
             aggregated_embedding = aggregate_embeddings(self.all_embeddings)
             return ProcessedData(
@@ -144,13 +142,12 @@ class PDFHandler(FileHandler):
         try:
             reader = PdfReader(self.file_path)
             content = " ".join(page.extract_text() for page in reader.pages if page.extract_text())
-            chunks_text = split_text(content, self.chunk_size)
+            chunks_text = split_text(content, 256)
             chunks = [{
                 "dataset_id": self.dataset_id,
                 "content": chunk,
                 "metadata": {}
             } for chunk in chunks_text]
-        
             data = self.generate_embeddings(chunks)
             self.all_rows.extend(data.rows)
             self.all_embeddings.extend(data.embeddings)
@@ -172,7 +169,7 @@ class TextHandler(FileHandler):
         try:
             with open(self.file_path, "r", encoding="utf-8") as file:
                 content = file.read()
-            chunks_text = split_text(content, self.chunk_size)
+            chunks_text = split_text(content, 256)
             chunks = [{
                 "dataset_id": self.dataset_id,
                 "content": chunk,
@@ -200,7 +197,7 @@ class DatasetProcessor:
     def __init__(self, payload: Dict[str, Any]):
         self.dataset_id = payload["id"]
         self.uri = payload["URI"]
-        self.chunk_size = 500
+        self.chunk_size = 1000
         self.batch_size = 50
         self.tpm_limit = 1000000
         self.file_path = download_file1(self.uri)
@@ -273,8 +270,12 @@ def download_file1(uri, destination="downloads"):
 def dynamic_chunk_batch_sizes(file_path: str):
     file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
     if file_size_mb > 100:
+        return 300, 50
+    elif file_size_mb > 50:
         return 100, 25
     elif file_size_mb > 25:
+        return 50, 10
+    elif file_size_mb > 20:
         return 50, 10
     else:
         return 10, 5
@@ -298,23 +299,26 @@ def smart_chunk_data(data: List[Dict[str, Any]], max_tokens: int, max_chunks: in
     tokens_per_chunk = max(total_tokens // max_chunks, max_tokens)
     
     chunks = []
-    current_chunk = {"content": "", "metadata": {}}
+    current_chunk = {"dataset_id":"", "content": "", "metadata": {}}
     current_tokens = 0
 
     for row in data:
         content = row.get("content", "").strip()
+        id = row.get("dataset_id", "")
         token_count = len(content.split())
 
         if current_tokens + token_count > tokens_per_chunk and len(chunks) < max_chunks - 1:
             chunks.append(current_chunk)
-            current_chunk = {"content": "", "metadata": {}}
+            current_chunk = {"dataset_id":"","content": "", "metadata": {}}
             current_tokens = 0
-
+        current_chunk["dataset_id"] = id
         current_chunk["content"] += f" {content}"
         current_tokens += token_count
-
-    if current_chunk["content"]:
-        chunks.append(current_chunk)
+        current_chunk["metadata"] = {
+            "word_count": len(current_chunk["content"].split()),
+            "char_count": len(current_chunk["content"]),
+            # Add more metadata fields as needed
+        }
 
     return chunks
 
@@ -452,17 +456,18 @@ def process_dataset(payload: Dict[str, Any]):
         
         processor = DatasetProcessor(payload)
         processed_data = processor.process()
+        if len(processed_data.rows)>0:
+            
+            # Update dataset metadata in Supabase
+            update_supabase_dataset(
+                dataset_id=processor.dataset_id,
+                schema=processed_data.schema,
+                tags=processed_data.tags,
+                embedding=processed_data.aggregated_embedding
+            )
 
-        # Update dataset metadata in Supabase
-        update_supabase_dataset(
-            dataset_id=processor.dataset_id,
-            schema=processed_data.schema,
-            tags=processed_data.tags,
-            embedding=processed_data.aggregated_embedding
-        )
-
-        # Insert rows into Supabase
-        insert_rows_into_supabase(processed_data.rows)
+            # Insert rows into Supabase
+            insert_rows_into_supabase(processed_data.rows)
 
         print(f"Successfully processed dataset {processor.dataset_id}")
     except Exception as e:
