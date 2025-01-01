@@ -282,7 +282,7 @@ def dynamic_chunk_batch_sizes(file_path: str):
     
 
 
-def smart_chunk_data(data: List[Dict[str, Any]], max_tokens: int, max_chunks: int = 500) -> List[Dict[str, Any]]:
+def smart_chunk_data(data: List[Dict[str, Any]], max_tokens: int, max_chunks: int = 1500) -> List[Dict[str, Any]]:
     """
     Chunk data into a flat list of aggregated chunks, not exceeding max_chunks.
     Each chunk's total tokens do not exceed max_tokens.
@@ -426,14 +426,40 @@ def update_supabase_dataset(dataset_id: str, schema: Dict[str, Any], tags: List[
         print(f"Error updating Supabase dataset: {e}")
         raise
 
-def insert_rows_into_supabase(rows: List[Dict[str, Any]]):
-    try:
-        response = supabase.table("dataset_rows").upsert(rows).execute()
-        print(f"Rows successfully inserted into dataset_rows! Count: {response.count}")
-    except Exception as e:
-        print(f"Error inserting rows into dataset_rows: {e}")
-        raise
+def split_into_batches(data: List[Dict[str, Any]], batch_size: int) -> List[List[Dict[str, Any]]]:
+    """
+    Splits a list of data into smaller batches.
 
+    Args:
+        data (List[Dict[str, Any]]): The list of data rows to split.
+        batch_size (int): The number of rows per batch.
+
+    Returns:
+        List[List[Dict[str, Any]]]: A list containing batched data rows.
+    """
+    return [data[i:i + batch_size] for i in range(0, len(data), batch_size)]
+
+
+def insert_rows_into_supabase(rows: List[Dict[str, Any]],batch_size: int = 100,max_retries: int = 3,backoff_factor: float = 0.5):
+    batches = split_into_batches(rows, batch_size)
+    total_batches = len(batches)
+    print(f"Total batches to upsert: {total_batches}")
+
+    for idx, batch in enumerate(batches, start=1):
+        attempt = 0
+        while attempt <= max_retries:
+            try:
+                response = supabase.table("dataset_rows").upsert(batch).execute()
+                print(f"Batch {idx}/{total_batches} upserted successfully! Count: {response.count}")
+                break  # Exit retry loop on success
+            except Exception as e:
+                attempt += 1
+                if attempt > max_retries:
+                    print(f"Failed to insert batch {idx}/{total_batches} after {max_retries} attempts: {e}")
+                    raise
+                wait_time = backoff_factor * (2 ** (attempt - 1))
+                print(f"Error inserting batch {idx}/{total_batches}: {e}. Retrying in {wait_time} seconds...")
+                time.sleep(wait_time)
 
 
 def split_text(content: str, chunk_size: int) -> List[str]:
