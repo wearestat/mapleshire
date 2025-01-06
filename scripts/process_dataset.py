@@ -510,6 +510,8 @@ if __name__ == "__main__":
     payload_file = sys.argv[1]
     try:
         with open(payload_file, 'r') as f:
+            print("Loading payload file...")
+            print(f"Payload file: {payload_file}")
             payload = json.load(f)
         process_dataset(payload)
     except json.JSONDecodeError as e:
