@@ -513,7 +513,8 @@ if __name__ == "__main__":
             print("Loading payload file...")
             print(f"Payload file: {payload_file}")
             print(f"Payload content: {f.read()}")
-            payload = json.load(f)
+            payload_raw = f.read()
+            payload = json.loads(payload_raw)
         process_dataset(payload)
     except json.JSONDecodeError as e:
         print(f"Invalid JSON input: {e}")
