@@ -37,4 +37,4 @@ jobs:
         run: |
              echo '${{ toJson(github.event.client_payload) }}'
              echo "${{ toJson(github.event.client_payload) }}" > payload.json
-             python scripts/process_dataset.py payload.json
+             python scripts/process_dataset.py '${{ github.event.client_payload }}'
