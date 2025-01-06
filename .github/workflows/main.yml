@@ -36,5 +36,6 @@ jobs:
           SERVICE_ROLE: ${{ secrets.SERVICE_ROLE }}         
         run: |
              echo '${{ toJson(github.event.client_payload) }}'
-             echo $"${{ toJson(github.event.client_payload) }}" > payload.json
+             echo $'${{ toJson(github.event.client_payload) }}' > payload.json
+             run: cat payload.json
              python scripts/process_dataset.py payload.json
