@@ -22,7 +22,8 @@ jobs:
       # Step 3: Install dependencies
       - name: Install Dependencies
         run: |
-             pip pip install pandas openai supabase PyPDF2 numpy requests openpyxl xlrd json time
+          python -m pip install --upgrade pip
+          pip install pandas openai supabase PyPDF2 numpy requests openpyxl xlrd json time
 
 
       - name: Log Payload
