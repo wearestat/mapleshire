@@ -511,9 +511,9 @@ if __name__ == "__main__":
     try:
         with open(payload_file, 'r') as f:
             print("Loading payload file...")
-            print(f"Payload file: {payload_file}")
-            print(f"Payload content: {f.read()}")
+            print(f"Payload file: {payload_file}")      
             payload_raw = f.read()
+            print(f"Payload content: {payload_raw}")
             payload = json.loads(payload_raw)
         process_dataset(payload)
     except json.JSONDecodeError as e:
