@@ -311,14 +311,16 @@ def smart_chunk_data(data: List[Dict[str, Any]], max_tokens: int, max_chunks: in
 
     for row in data:
         content = row.get("content", "").strip()
-        id = row.get("dataresource_id", "")
+        resid = row.get("dataresource_id", "")
+        datasetid = row.get("dataset_id", "")
         token_count = len(content.split())
 
         if current_tokens + token_count > tokens_per_chunk and len(chunks) < max_chunks - 1:
             chunks.append(current_chunk)
             current_chunk = {"dataresource_id":"","content": "", "metadata": {}}
             current_tokens = 0
-        current_chunk["dataresource_id"] = id
+        current_chunk["dataresource_id"] = resid
+        current_chunk["dataset_id"] = datasetid
         current_chunk["content"] += f" {content}"
         current_tokens += token_count
         current_chunk["metadata"] = {
@@ -438,7 +440,7 @@ def update_supabase_dataset(dataset_id: str, schema: Dict[str, Any], tags: List[
 def update_supabase_dataresource(dataresource_id: str, schema: Dict[str, Any], tags: List[Dict[str, str]], embedding: List[float]):
     try:
         response = supabase.table("data_resources").update({
-           
+            
             "embeddings": embedding
         }).eq("id", dataresource_id).execute()
 
