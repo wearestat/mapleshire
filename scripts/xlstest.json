@@ -1,5 +1,6 @@
 {
-    "id": "881cc5d5-d634-46df-98b4-6737cb7aa4c0",
+   "dataset_id": "970867fd-80fd-45ea-a20f-6f663c99a4b0",
+    "dataresource_id": 3,
     "organisation_id": "b0466c0e-6067-48e7-b932-8637d3ae31ed",
-    "URI": "https://github.com/wearestat/SNBDC/blob/main/april-2023-redacted-bdc.xls"
+    "URI": "https://github.com/wearestat/SNBDC/blob/main/may-2023-redacted.xls"
 }
