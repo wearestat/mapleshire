@@ -46,9 +46,10 @@ class ProcessedChunks:
 
 
 class FileHandler(ABC):
-    def __init__(self, file_path: str, dataset_id: str, chunk_size: int, batch_size: int, tpm_limit: int):
+    def __init__(self, file_path: str, dataset_id: str, dataresource_id: str ,chunk_size: int, batch_size: int, tpm_limit: int):
         self.file_path = file_path
         self.dataset_id = dataset_id
+        self.dataresource_id = dataresource_id
         self.chunk_size = chunk_size
         self.batch_size = batch_size
         self.tpm_limit = tpm_limit
@@ -83,7 +84,7 @@ class CSVHandler(FileHandler):
                 self.tags = [{"name": col} for col in dataframe.columns]
 
             # Create content rows and generate embeddings
-            rows = create_content_rows(dataframe, self.dataset_id)
+            rows = create_content_rows(dataframe, self.dataresource_id,self.dataset_id)
             chunks  = smart_chunk_data(rows, 1000)
             processedData = self.generate_embeddings(chunks)
             self.all_rows.extend(processedData.rows)
@@ -119,7 +120,7 @@ class ExcelHandler(FileHandler):
 
             # Create content rows and generate embeddings
             #clean data 
-            rows = create_content_rows(dataframe, self.dataset_id)
+            rows = create_content_rows(dataframe,self.dataresource_id ,self.dataset_id)
             chunks  = smart_chunk_data(rows, 1000)
             processedData = self.generate_embeddings(chunks)
             self.all_rows.extend(processedData.rows)
@@ -145,6 +146,7 @@ class PDFHandler(FileHandler):
             chunks_text = split_text(content, 256)
             chunks = [{
                 "dataset_id": self.dataset_id,
+                "dataresource_id": self.dataresource_id,
                 "content": chunk,
                 "metadata": {}
             } for chunk in chunks_text]
@@ -195,7 +197,8 @@ class TextHandler(FileHandler):
 
 class DatasetProcessor:
     def __init__(self, payload: Dict[str, Any]):
-        self.dataset_id = payload["id"]
+        self.dataset_id = payload["dataset_id"]
+        self.dataresource_id = payload["dataresource_id"]
         self.uri = payload["URI"]
         self.chunk_size = 1000
         self.batch_size = 50
@@ -209,6 +212,7 @@ class DatasetProcessor:
         if self.file_ext == ".csv":
             return CSVHandler(
                 file_path=self.file_path,
+                dataresource_id=self.dataresource_id,
                 dataset_id=self.dataset_id,
                 chunk_size=chunk_size,
                 batch_size=batch_size,
@@ -219,6 +223,7 @@ class DatasetProcessor:
             return ExcelHandler(
                 file_path=self.file_path,
                 dataset_id=self.dataset_id,
+                dataresource_id=self.dataresource_id,
                 chunk_size=chunk_size,
                 batch_size=batch_size,
                 tpm_limit=self.tpm_limit
@@ -227,6 +232,7 @@ class DatasetProcessor:
             return PDFHandler(
                 file_path=self.file_path,
                 dataset_id=self.dataset_id,
+                dataresource_id=self.dataresource_id,
                 chunk_size=chunk_size,
                 batch_size=batch_size,
                 tpm_limit=self.tpm_limit
@@ -235,6 +241,7 @@ class DatasetProcessor:
             return TextHandler(
                 file_path=self.file_path,
                 dataset_id=self.dataset_id,
+                dataresource_id=self.dataresource_id,
                 chunk_size=chunk_size,
                 batch_size=batch_size,
                 tpm_limit=self.tpm_limit
@@ -243,7 +250,7 @@ class DatasetProcessor:
             raise ValueError(f"Unsupported file extension: {self.file_ext}")
 
     def process(self) -> ProcessedData:
-        print(f"Processing dataset {self.dataset_id} with file {self.file_path}")
+        print(f"Processing data resource {self.dataresource_id} with file {self.file_path}")
         return self.handler.process()
 
 
@@ -299,19 +306,19 @@ def smart_chunk_data(data: List[Dict[str, Any]], max_tokens: int, max_chunks: in
     tokens_per_chunk = max(total_tokens // max_chunks, max_tokens)
     
     chunks = []
-    current_chunk = {"dataset_id":"", "content": "", "metadata": {}}
+    current_chunk = {"dataresource_id":"", "content": "", "metadata": {}}
     current_tokens = 0
 
     for row in data:
         content = row.get("content", "").strip()
-        id = row.get("dataset_id", "")
+        id = row.get("dataresource_id", "")
         token_count = len(content.split())
 
         if current_tokens + token_count > tokens_per_chunk and len(chunks) < max_chunks - 1:
             chunks.append(current_chunk)
-            current_chunk = {"dataset_id":"","content": "", "metadata": {}}
+            current_chunk = {"dataresource_id":"","content": "", "metadata": {}}
             current_tokens = 0
-        current_chunk["dataset_id"] = id
+        current_chunk["dataresource_id"] = id
         current_chunk["content"] += f" {content}"
         current_tokens += token_count
         current_chunk["metadata"] = {
@@ -387,7 +394,7 @@ def chunk_data(data: List[Dict[str, Any]], chunk_size: int):
         yield data[i:i + chunk_size]
 
 
-def create_content_rows(dataframe: pd.DataFrame, dataset_id: str) -> List[Dict[str, Any]]:
+def create_content_rows(dataframe: pd.DataFrame, dataresource_id: str,dataset_id:str) -> List[Dict[str, Any]]:
     def sanitise_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
         """Convert NaN and NaT values to None for JSON compatibility."""
         return {
@@ -399,6 +406,7 @@ def create_content_rows(dataframe: pd.DataFrame, dataset_id: str) -> List[Dict[s
         content = " ".join([f"{col}: {row[col]}" for col in dataframe.columns if pd.notna(row[col])])
         sanitised_metadata = sanitise_metadata(row.to_dict())
         rows.append({
+            "dataresource_id": dataresource_id,
             "dataset_id": dataset_id,
             "content": content,
             "metadata": sanitised_metadata
@@ -416,8 +424,23 @@ def update_supabase_dataset(dataset_id: str, schema: Dict[str, Any], tags: List[
         response = supabase.table("datasets").update({
             "schema": json.dumps(schema),
             "tags": json.dumps(tags),
-            "embedding": embedding
+            "embeddings": embedding
         }).eq("id", dataset_id).execute()
+
+        if not response.data:
+            raise Exception(f"Error updating dataset: {response}")
+        print("Supabase dataset update successful!")
+    except Exception as e:
+        print(f"Error updating Supabase dataset: {e}")
+        raise
+
+
+def update_supabase_dataresource(dataresource_id: str, schema: Dict[str, Any], tags: List[Dict[str, str]], embedding: List[float]):
+    try:
+        response = supabase.table("data_resources").update({
+           
+            "embeddings": embedding
+        }).eq("id", dataresource_id).execute()
 
         if not response.data:
             raise Exception(f"Error updating dataset: {response}")
@@ -449,7 +472,7 @@ def insert_rows_into_supabase(rows: List[Dict[str, Any]],batch_size: int = 100,m
         attempt = 0
         while attempt <= max_retries:
             try:
-                response = supabase.table("dataset_rows").upsert(batch).execute()
+                response = supabase.table("data_resource_embeddings").upsert(batch).execute()
                 print(f"Batch {idx}/{total_batches} upserted successfully! Count: {response.count}")
                 break  # Exit retry loop on success
             except Exception as e:
@@ -491,11 +514,16 @@ def process_dataset(payload: Dict[str, Any]):
                 tags=processed_data.tags,
                 embedding=processed_data.aggregated_embedding
             )
-
+            update_supabase_dataresource(
+                dataresource_id=processor.dataresource_id,
+                schema=processed_data.schema,
+                tags=processed_data.tags,
+                embedding=processed_data.aggregated_embedding
+            )
             # Insert rows into Supabase
             insert_rows_into_supabase(processed_data.rows)
 
-        print(f"Successfully processed dataset {processor.dataset_id}")
+        print(f"Successfully processed dataset {processor.dataresource_id}")
     except Exception as e:
         print(f"Error processing dataset: {e}")
         sys.exit(1)
